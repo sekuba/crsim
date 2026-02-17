@@ -555,7 +555,7 @@ function renderCharts(output, chartSettings) {
   ];
 
   const perSlotLayout = baseLayout(
-    `Effective Per-slot Inclusion vs Invested Stake (derived from ${output.meta.horizonTag} horizon)`,
+    `Per-slot Inclusion vs Invested Stake (${output.meta.horizonTag} horizon)`,
     "Invested stake in USD [user sequencers]",
     "Effective per-slot inclusion probability",
     [Math.min(...invested), Math.max(...invested)],

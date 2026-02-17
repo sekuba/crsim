@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CR Simulation</title>
+  <title>CR SIM</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main class="page">
     <header>
-      <h1>Censorship Resistance Simulation</h1>
-      <p>Static browser version of <code>sim/cr_simulation.py</code>. Adjust config and recompute.</p>
+      <h1>CR sim for decentralized sequencers</h1>
+      <p>Defaults replicate current Aztec mainnet config. Adjust config and recompute.</p>
     </header>
 
     <section class="panel">
@@ -77,12 +77,12 @@
     </section>
 
     <section class="panel">
-      <h2>Effective Per-slot Inclusion</h2>
+      <h2>Per-slot Inclusion</h2>
       <div id="chart-per-slot" class="chart-wrap"></div>
     </section>
 
     <section class="panel">
-      <h2>Expected Inclusion Delay</h2>
+      <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
       <p class="note">Delay chart y-axis is capped at 30 days (720h). Values above the cap are hidden.</p>
     </section>
