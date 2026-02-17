@@ -24,11 +24,6 @@ class Config:
     epoch_slots: int = 32
     max_new_sequencers_per_epoch: int = 4
 
-    delay_focus_x_min_usd: float = 1_000.0
-    delay_focus_x_max_usd: float = 120_000_000.0
-    delay_focus_y_min_hours: float = 0.03
-    delay_focus_y_max_hours: float = 720 # 30d
-    delay_focus_y_padding_ratio: float = 0.10
     # Probability chart x-zoom: hide tail where both curves are already ~1.
     probability_near_one_margin: float = 0.001
 
@@ -51,14 +46,6 @@ class Config:
             raise ValueError("epoch_slots must be > 0")
         if self.max_new_sequencers_per_epoch <= 0:
             raise ValueError("max_new_sequencers_per_epoch must be > 0")
-        if self.delay_focus_x_max_usd <= self.delay_focus_x_min_usd:
-            raise ValueError("delay_focus_x_max_usd must be > delay_focus_x_min_usd")
-        if self.delay_focus_y_min_hours <= 0:
-            raise ValueError("delay_focus_y_min_hours must be > 0")
-        if self.delay_focus_y_max_hours <= self.delay_focus_y_min_hours:
-            raise ValueError("delay_focus_y_max_hours must be > delay_focus_y_min_hours")
-        if self.delay_focus_y_padding_ratio < 0:
-            raise ValueError("delay_focus_y_padding_ratio must be >= 0")
         if not (0.0 < self.probability_near_one_margin < 1.0):
             raise ValueError("probability_near_one_margin must be in (0, 1)")
 
@@ -375,6 +362,34 @@ def _polyline(xs: list[float], ys: list[float], x_min: float, x_max: float, y_mi
     return " ".join(pts)
 
 
+def _padded_bounds(values: list[float], relative_padding: float = 0.05, absolute_padding: float = 1.0) -> tuple[float, float]:
+    lower = min(values)
+    upper = max(values)
+    if upper - lower > EPSILON:
+        return lower, upper
+    center = lower
+    pad = max(abs(center) * relative_padding, absolute_padding)
+    return center - pad, center + pad
+
+
+def _visible_segments(xs: list[float], ys: list[float], y_min: float, y_max: float) -> list[tuple[list[float], list[float]]]:
+    segments: list[tuple[list[float], list[float]]] = []
+    seg_xs: list[float] = []
+    seg_ys: list[float] = []
+    for x, y in zip(xs, ys):
+        if math.isfinite(x) and math.isfinite(y) and y_min <= y <= y_max:
+            seg_xs.append(x)
+            seg_ys.append(y)
+            continue
+        if len(seg_xs) >= 2:
+            segments.append((seg_xs, seg_ys))
+        seg_xs = []
+        seg_ys = []
+    if len(seg_xs) >= 2:
+        segments.append((seg_xs, seg_ys))
+    return segments
+
+
 def write_svg_line_chart(
     path: Path,
     title: str,
@@ -423,6 +438,11 @@ def write_svg_line_chart(
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640">',
+        '<defs>',
+        '  <clipPath id="plot-area-clip">',
+        '    <rect x="80" y="40" width="1020" height="520"/>',
+        '  </clipPath>',
+        '</defs>',
         '<rect x="0" y="0" width="1200" height="640" fill="white"/>',
         '<line x1="80" y1="560" x2="1100" y2="560" stroke="black" stroke-width="2"/>',
         '<line x1="80" y1="560" x2="80" y2="40" stroke="black" stroke-width="2"/>',
@@ -435,12 +455,13 @@ def write_svg_line_chart(
         fxs, fys = filtered[i]
         if not fxs:
             continue
-        capped = [min(max(y, y_min), y_max) for y in fys]
         dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
-        lines.append(
-            f'<polyline fill="none" stroke="{color}" stroke-width="2"{dash_attr} '
-            f'points="{_polyline(fxs, capped, x_min, x_max, y_min, y_max)}"/>'
-        )
+        for seg_xs, seg_ys in _visible_segments(fxs, fys, y_min, y_max):
+            lines.append(
+                f'<polyline fill="none" stroke="{color}" stroke-width="2"{dash_attr} '
+                f'clip-path="url(#plot-area-clip)" '
+                f'points="{_polyline(seg_xs, seg_ys, x_min, x_max, y_min, y_max)}"/>'
+            )
         lines.append(
             f'<text x="860" y="{70 + i * 24}" font-family="sans-serif" '
             f'font-size="14" fill="{color}">{html.escape(name)}</text>'
@@ -555,7 +576,7 @@ def run(cfg: Config) -> None:
         probability_x_max = invested[-1]
 
     write_svg_line_chart(
-        path=figures_dir / f"cr_{horizon_tag}_probability_vs_stake.svg",
+        path=figures_dir / "cr_probability_vs_stake.svg",
         title=f"CR vs Invested Stake Over {horizon_label.title()}",
         x_label="Invested stake in USD [user sequencers]",
         y_label=f"Inclusion probability within {horizon_label}",
@@ -589,22 +610,25 @@ def run(cfg: Config) -> None:
         usd_per_seq=usd_per_seq,
     )
 
-    delay_rows = [r for r in rows if cfg.delay_focus_x_min_usd <= r["invested_stake_usd"] <= cfg.delay_focus_x_max_usd]
-    if not delay_rows:
-        delay_rows = rows
     finite_delay_values = [
         v
-        for r in delay_rows
+        for r in rows
         for v in (r["expected_hours_non_committee"], r["expected_hours_committee"])
         if math.isfinite(v)
     ]
+    delay_y_cap_hours = 30.0 * 24.0
+    delay_x_min, delay_x_max = _padded_bounds(invested, absolute_padding=usd_per_seq)
     if finite_delay_values:
-        delay_y_max = max(finite_delay_values) * (1.0 + cfg.delay_focus_y_padding_ratio)
+        delay_y_min, delay_y_max = _padded_bounds(
+            finite_delay_values,
+            absolute_padding=cfg.slot_seconds / 3600.0,
+        )
+        delay_y_max = min(delay_y_max, delay_y_cap_hours)
+        if delay_y_max <= delay_y_min:
+            delay_y_min = 0.0
+            delay_y_max = delay_y_cap_hours
     else:
-        delay_y_max = cfg.delay_focus_y_min_hours * 2.0
-    delay_y_max = min(delay_y_max, cfg.delay_focus_y_max_hours)
-    if delay_y_max <= cfg.delay_focus_y_min_hours:
-        delay_y_max = cfg.delay_focus_y_min_hours * 2.0
+        delay_y_min, delay_y_max = 0.0, delay_y_cap_hours
 
     write_svg_line_chart(
         path=figures_dir / "cr_expected_delay_vs_stake.svg",
@@ -616,9 +640,9 @@ def run(cfg: Config) -> None:
             ("Committee", [r["expected_hours_committee"] for r in rows], "#B02E0C", "6,4"),
             ("Non-committee", [r["expected_hours_non_committee"] for r in rows], "#0B6E4F", None),
         ],
-        x_min=cfg.delay_focus_x_min_usd,
-        x_max=cfg.delay_focus_x_max_usd,
-        y_min=cfg.delay_focus_y_min_hours,
+        x_min=delay_x_min,
+        x_max=delay_x_max,
+        y_min=delay_y_min,
         y_max=delay_y_max,
         y_tick_decimals=2,
         x_ticks_usd_and_seq=True,
@@ -627,7 +651,7 @@ def run(cfg: Config) -> None:
 
     print(f"Wrote {main_csv}")
     print("Wrote figures:")
-    print(f" - figures/cr_{horizon_tag}_probability_vs_stake.svg")
+    print(" - figures/cr_probability_vs_stake.svg")
     print(" - figures/cr_per_slot_probability_vs_stake.svg")
     print(" - figures/cr_expected_delay_vs_stake.svg")
     print(f"Slots in horizon: {slots}")

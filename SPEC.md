@@ -50,7 +50,7 @@ Epoch-level inclusion (for an epoch with `m` slots):
 
 ## Outputs
 - `results/cr_simulation.csv`
-- `figures/cr_<horizon>d_probability_vs_stake.svg`
+- `figures/cr_probability_vs_stake.svg`
 - `figures/cr_per_slot_probability_vs_stake.svg`
 - `figures/cr_expected_delay_vs_stake.svg`
 
@@ -65,12 +65,11 @@ Epoch-level inclusion (for an epoch with `m` slots):
 - `horizon_days`: analysis horizon in days (main control knob).
 - `epoch_slots`: slots per epoch (onboarding cadence).
 - `max_new_sequencers_per_epoch`: user onboarding throughput.
-- `delay_focus_x_min_usd`: lower x bound for delay chart focus window.
-- `delay_focus_x_max_usd`: upper x bound for delay chart focus window.
-- `delay_focus_y_min_hours`: lower y bound for delay chart.
-- `delay_focus_y_max_hours`: upper y cap for delay chart.
-- `delay_focus_y_padding_ratio`: dynamic padding above max visible delay before applying y cap.
 - `probability_near_one_margin`: x-axis auto-crop threshold for probability chart; crop begins once both curves are within this margin of 1.
+
+Delay chart scaling:
+- x/y bounds are auto-derived from generated data (finite delay values), with small padding only when a bound would collapse to a single point.
+- y-axis is capped at 30 days (720 hours); values above this cap are clipped in the plot.
 
 ## Run
 ```bash
