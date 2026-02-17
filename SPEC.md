@@ -69,7 +69,7 @@ Epoch-level inclusion (for an epoch with `m` slots):
 
 Delay chart scaling:
 - x/y bounds are auto-derived from generated data (finite delay values), with small padding only when a bound would collapse to a single point.
-- y-axis is capped at 30 days (720 hours); values above this cap are clipped in the plot.
+- y-axis is capped at 30 days (720 hours); autoscaling is based on values at or below the cap, and values above the cap are clipped in the plot.
 
 ## Run
 ```bash

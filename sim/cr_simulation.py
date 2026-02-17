@@ -20,7 +20,7 @@ class Config:
     committee_size: int = 24
     slot_seconds: int = 72
 
-    horizon_days: int = 100
+    horizon_days: int = 7
     epoch_slots: int = 32
     max_new_sequencers_per_epoch: int = 4
 
@@ -617,16 +617,15 @@ def run(cfg: Config) -> None:
         if math.isfinite(v)
     ]
     delay_y_cap_hours = 30.0 * 24.0
+    visible_delay_values = [v for v in finite_delay_values if v <= delay_y_cap_hours]
     delay_x_min, delay_x_max = _padded_bounds(invested, absolute_padding=usd_per_seq)
-    if finite_delay_values:
+    if visible_delay_values:
         delay_y_min, delay_y_max = _padded_bounds(
-            finite_delay_values,
+            visible_delay_values,
             absolute_padding=cfg.slot_seconds / 3600.0,
         )
-        delay_y_max = min(delay_y_max, delay_y_cap_hours)
-        if delay_y_max <= delay_y_min:
-            delay_y_min = 0.0
-            delay_y_max = delay_y_cap_hours
+    elif finite_delay_values:
+        delay_y_min, delay_y_max = 0.0, delay_y_cap_hours
     else:
         delay_y_min, delay_y_max = 0.0, delay_y_cap_hours
 
