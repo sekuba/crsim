@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CR Simulation</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>Censorship Resistance Simulation</h1>
+      <p>Static browser version of <code>sim/cr_simulation.py</code>. Adjust config and recompute.</p>
+    </header>
+
+    <section class="panel">
+      <h2>Config</h2>
+      <form id="config-form" class="grid">
+        <label>base_sequencers
+          <input name="base_sequencers" type="number" min="0" step="1" required>
+        </label>
+        <label>stake_per_sequencer_token
+          <input name="stake_per_sequencer_token" type="number" min="1" step="1" required>
+        </label>
+        <label>token_usd
+          <input name="token_usd" type="number" min="0.0000001" step="any" required>
+        </label>
+        <label>censor_fraction
+          <input name="censor_fraction" type="number" min="0" max="1" step="any" required>
+        </label>
+        <label>committee_size
+          <input name="committee_size" type="number" min="1" step="1" required>
+        </label>
+        <label>slot_seconds
+          <input name="slot_seconds" type="number" min="1" step="1" required>
+        </label>
+        <label>horizon_days
+          <input name="horizon_days" type="number" min="1" step="1" required>
+        </label>
+        <label>epoch_slots
+          <input name="epoch_slots" type="number" min="1" step="1" required>
+        </label>
+        <label>max_new_sequencers_per_epoch
+          <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
+        </label>
+        <label>probability_near_one_margin
+          <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
+        </label>
+      </form>
+      <h3>Chart Settings</h3>
+      <form id="chart-form" class="chart-grid">
+        <label class="check">
+          <input name="show_markers" type="checkbox">
+          show markers
+        </label>
+        <label class="check">
+          <input name="probability_full_x" type="checkbox">
+          full x-range for probability chart
+        </label>
+        <label class="check">
+          <input name="delay_log_scale" type="checkbox">
+          log-scale y-axis for delay chart
+        </label>
+      </form>
+      <div class="actions">
+        <button id="run-btn" type="button">Run Simulation</button>
+        <button id="reset-btn" type="button">Reset Defaults</button>
+        <button id="csv-btn" type="button">Download CSV</button>
+      </div>
+      <p id="status" class="status">Ready.</p>
+      <p id="summary" class="summary"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Inclusion vs. Stake</h2>
+      <div id="chart-probability" class="chart-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Effective Per-slot Inclusion</h2>
+      <div id="chart-per-slot" class="chart-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Expected Inclusion Delay</h2>
+      <div id="chart-delay" class="chart-wrap"></div>
+      <p class="note">Delay chart y-axis is capped at 30 days (720h). Values above the cap are hidden.</p>
+    </section>
+  </main>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
