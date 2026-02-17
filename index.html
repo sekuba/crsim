@@ -35,7 +35,7 @@
           <input name="slot_seconds" type="number" min="1" step="1" required>
         </label>
         <label>max_horizon_days
-          <input name="max_horizon_days" type="number" min="1" step="1" required>
+          <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
         </label>
         <label>epoch_slots
           <input name="epoch_slots" type="number" min="1" step="1" required>
@@ -71,7 +71,7 @@
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">Inclusion can be lower-bounded by time needed to add sequencers.X-axis uses the full max_horizon_days. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
+      <p class="note">X-axis uses the full max_horizon_days range, with ticks showing USD, user sequencer count, and derived onboarding time. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
