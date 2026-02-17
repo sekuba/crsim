@@ -75,3 +75,12 @@ Delay chart scaling:
 ```bash
 python sim/cr_simulation.py
 ```
+
+## Static Web App
+- Open `web/index.html` in a browser (or serve `web/` with any static server).
+- Charts use Plotly for interactivity (zoom, pan, reset, legend toggles, image export).
+- Actions:
+  - `Run Simulation`: recompute charts and in-memory table.
+  - `Reset Defaults`: restore default config values.
+  - `Download CSV`: export current results as `cr_simulation.csv`.
+  - Chart settings allow marker toggles, full x-range for probability chart, and log-scale for delay chart.
