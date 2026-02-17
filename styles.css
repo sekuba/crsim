@@ -39,22 +39,10 @@ header p {
   font-size: 20px;
 }
 
-.panel h3 {
-  margin: 14px 0 8px;
-  font-size: 15px;
-  color: #334155;
-}
-
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
-}
-
-.chart-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
 }
 
 label {
@@ -63,18 +51,6 @@ label {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.check {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-}
-
-.check input {
-  width: auto;
-  margin: 0;
 }
 
 input {

@@ -59,19 +59,19 @@
     <section class="panel">
       <h2>Cumulative Inclusion Over Time</h2>
       <div id="chart-cumulative" class="chart-wrap"></div>
-      <p class="note">X-axis shows elapsed days with derived invested stake and user sequencer count in tick labels. Range expands until both curves reach 1 - probability_near_one_margin, bounded by max_horizon_days.</p>
+      <p class="note">X-axis range expands until both curves reach 1 - probability_near_one_margin, bounded by max_horizon_days.</p>
     </section>
 
     <section class="panel">
       <h2>Per-slot Inclusion</h2>
       <div id="chart-per-slot" class="chart-wrap"></div>
-      <p class="note">Per-slot chart spans the full max_horizon_days range.</p>
+      <p class="note">X-axis uses the full max_horizon_days range.</p>
     </section>
 
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">Delay chart x-range uses the full max_horizon_days sequencer range. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
+      <p class="note">Inclusion can be lower-bounded by time needed to add sequencers.X-axis uses the full max_horizon_days. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
