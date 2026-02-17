@@ -23,7 +23,6 @@ const INTEGER_FIELDS = new Set([
   "stake_per_sequencer_token",
   "committee_size",
   "slot_seconds",
-  "max_horizon_days",
   "epoch_slots",
   "max_new_sequencers_per_epoch",
 ]);
@@ -451,6 +450,7 @@ function runSimulation(cfg) {
   }
 
   const invested = rows.map((r) => Number(r.invested_stake_usd));
+  const userSeq = rows.map((r) => Number(r.user_sequencers));
   const nonDelay = rows.map((r) => r.expected_hours_non_committee);
   const comDelay = rows.map((r) => r.expected_hours_committee);
 
@@ -508,6 +508,7 @@ function runSimulation(cfg) {
     },
     series: {
       invested,
+      userSeq,
       nonDelay,
       comDelay,
       cumulativeDays: toCumulativeSlice(timeSeries.days),
@@ -545,6 +546,14 @@ function formatDayTickLabel(days) {
   return days.toFixed(2);
 }
 
+function daysToReachUserSeq(userSeq, slotSeconds, epochSlots, maxNewPerEpoch) {
+  if (userSeq <= 0) {
+    return 0.0;
+  }
+  const epochs = Math.ceil(userSeq / maxNewPerEpoch);
+  return (epochs * epochSlots * slotSeconds) / (24 * 3600);
+}
+
 function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNewPerEpoch, usdPerSeq) {
   const values = [];
   const labels = [];
@@ -557,6 +566,19 @@ function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNew
     const seq = epochs * maxNewPerEpoch;
     const usd = seq * usdPerSeq;
     labels.push(`${formatDayTickLabel(dayValue)}d | $${Math.round(usd).toLocaleString()} [${seq}]`);
+  }
+  return { values, labels };
+}
+
+function buildUsdSeqTimeTicks(xMinUsd, xMaxUsd, slotSeconds, epochSlots, maxNewPerEpoch, usdPerSeq) {
+  const values = [];
+  const labels = [];
+  for (let i = 0; i <= 5; i += 1) {
+    const usdValue = xMinUsd + ((xMaxUsd - xMinUsd) * i) / 5;
+    values.push(usdValue);
+    const seq = Math.max(0, Math.round(usdValue / usdPerSeq));
+    const days = daysToReachUserSeq(seq, slotSeconds, epochSlots, maxNewPerEpoch);
+    labels.push(`$${Math.round(usdValue).toLocaleString()} [${seq}] | ${formatDayTickLabel(days)}d`);
   }
   return { values, labels };
 }
@@ -702,9 +724,26 @@ function renderCharts(output) {
 
   const invested = output.series.invested;
 
-  const delayXTicks = buildUsdSeqTicks(output.meta.delayXMin, output.meta.delayXMax, output.meta.usdPerSeq);
+  const delayXTicks = buildUsdSeqTimeTicks(
+    output.meta.delayXMin,
+    output.meta.delayXMax,
+    output.meta.slotSeconds,
+    output.meta.epochSlots,
+    output.meta.maxNewSequencersPerEpoch,
+    output.meta.usdPerSeq
+  );
   const delayYMin = output.meta.delayYMin;
   const delayYMax = output.meta.delayYMax;
+  const delayHover = invested.map((usd, idx) => {
+    const seq = output.series.userSeq[idx];
+    const days = daysToReachUserSeq(
+      seq,
+      output.meta.slotSeconds,
+      output.meta.epochSlots,
+      output.meta.maxNewSequencersPerEpoch
+    );
+    return `Day ${days.toFixed(3)}<br>Invested: $${Math.round(usd).toLocaleString()}<br>User sequencers: ${seq.toLocaleString()}`;
+  });
 
   const delayLayout = baseLayout(
     `Expected Inclusion Delay vs Invested Stake (${output.meta.horizonTag})`,
@@ -721,6 +760,8 @@ function renderCharts(output) {
       y: toVisibleY(output.series.comDelay, delayYMin, delayYMax),
       mode: "lines",
       name: "Committee",
+      text: delayHover,
+      hovertemplate: "%{text}<br>Expected delay: %{y:.6f}h<extra>Committee</extra>",
       line: { color: COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
@@ -729,6 +770,8 @@ function renderCharts(output) {
       y: toVisibleY(output.series.nonDelay, delayYMin, delayYMax),
       mode: "lines",
       name: "Non-committee",
+      text: delayHover,
+      hovertemplate: "%{text}<br>Expected delay: %{y:.6f}h<extra>Non-committee</extra>",
       line: { color: NON_COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },

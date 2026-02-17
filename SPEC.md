@@ -64,7 +64,7 @@ Epoch-level inclusion (for an epoch with `m` slots):
 - `censor_fraction`: fraction of initial network that censors.
 - `committee_size`: committee size `k`.
 - `slot_seconds`: slot duration.
-- `max_horizon_days`: maximum analysis horizon in days (upper bound for all web chart ranges).
+- `max_horizon_days`: maximum analysis horizon in days (upper bound for all web chart ranges; fractional values like `0.1` are allowed).
 - `epoch_slots`: slots per epoch (onboarding cadence).
 - `max_new_sequencers_per_epoch`: user onboarding throughput.
 - `probability_near_one_margin`: stopping threshold for cumulative horizon search; cumulative plot stops once both curves are within this margin of 1 (unless `max_horizon_days` is hit first).
@@ -83,6 +83,7 @@ python sim/cr_simulation.py
 - Charts use Plotly for interactivity (zoom, pan, reset, legend toggles, image export).
 - Includes a cumulative inclusion chart over elapsed time; x-ticks show derived invested USD and user sequencer count under the "only user onboarding" assumption.
 - Effective per-slot chart uses elapsed-time x-ticks in the same format, but always spans full `max_horizon_days`.
+- Delay chart x-ticks also show USD, user sequencer count, and derived onboarding time while spanning full `max_horizon_days`.
 - Actions:
   - `Run Simulation`: recompute charts and in-memory table.
   - `Reset Defaults`: restore default config values.
