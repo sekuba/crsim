@@ -143,6 +143,10 @@ function validateConfig(cfg) {
   if (cfg.probability_near_one_margin <= 0 || cfg.probability_near_one_margin >= 1) {
     errors.push("probability_near_one_margin must be in (0, 1)");
   }
+  const derivedSlots = Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
+  if (derivedSlots <= 0) {
+    errors.push("max_horizon_days and slot_seconds imply 0 slots; increase max_horizon_days or decrease slot_seconds");
+  }
   return errors;
 }
 
@@ -653,7 +657,7 @@ function renderCharts(output) {
   ];
 
   const perSlotLayout = baseLayout(
-    `Effective Per-slot Inclusion Over Time (${output.meta.horizonTag} max horizon)`,
+    `Effective Per-slot Inclusion Over Time (${output.meta.horizonTag})`,
     "Elapsed days | invested stake in USD [user sequencers]",
     "Effective per-slot inclusion probability",
     [Math.min(...output.series.perSlotDays), Math.max(...output.series.perSlotDays)],
@@ -703,7 +707,7 @@ function renderCharts(output) {
   const delayYMax = output.meta.delayYMax;
 
   const delayLayout = baseLayout(
-    `Expected Inclusion Delay vs Invested Stake (${output.meta.horizonTag} max horizon range)`,
+    `Expected Inclusion Delay vs Invested Stake (${output.meta.horizonTag})`,
     "Invested stake in USD [user sequencers]",
     "Expected time to inclusion (hours)",
     [output.meta.delayXMin, output.meta.delayXMax],
@@ -818,7 +822,7 @@ function runFromForm() {
       ? `Cumulative >= ${cumulativeTargetPct}% by ${output.meta.cumulativeXMaxDays.toFixed(2)} days`
       : `Cumulative at ${output.meta.cumulativeXMaxDays.toFixed(2)} days: committee ${(output.meta.cumulativeEndComProb * 100).toFixed(3)}%, non-committee ${(output.meta.cumulativeEndNonProb * 100).toFixed(3)}%`;
     const assumptionsSummary = "Assumptions: all added sequencers are user sequencers; onboarding updates at epoch boundaries; initial censor share is fixed.";
-    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Data points: ${output.meta.userPointCount.toLocaleString()} | ${cumulativeSummary} | ${assumptionsSummary}`;
+    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Stake samples: ${output.meta.userPointCount.toLocaleString()} | ${cumulativeSummary} | ${assumptionsSummary}`;
     setStatus("Simulation complete.");
   } catch (error) {
     setStatus(`Error: ${error.message}`, true);
