@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import csv
+import html
 import math
 from dataclasses import dataclass
 from pathlib import Path
+
+EPSILON = 1e-15
 
 
 @dataclass(frozen=True)
@@ -17,17 +20,47 @@ class Config:
     committee_size: int = 24
     slot_seconds: int = 72
 
-    horizon_days: int = 30
+    horizon_days: int = 100
     epoch_slots: int = 32
     max_new_sequencers_per_epoch: int = 4
 
     delay_focus_x_min_usd: float = 1_000.0
-    delay_focus_x_max_usd: float = 120_000.0
+    delay_focus_x_max_usd: float = 120_000_000.0
     delay_focus_y_min_hours: float = 0.03
-    delay_focus_y_max_hours: float = 168 # 7d
+    delay_focus_y_max_hours: float = 720 # 30d
     delay_focus_y_padding_ratio: float = 0.10
     # Probability chart x-zoom: hide tail where both curves are already ~1.
     probability_near_one_margin: float = 0.001
+
+    def validate(self) -> None:
+        if self.base_sequencers < 0:
+            raise ValueError("base_sequencers must be >= 0")
+        if self.stake_per_sequencer_token <= 0:
+            raise ValueError("stake_per_sequencer_token must be > 0")
+        if self.token_usd <= 0:
+            raise ValueError("token_usd must be > 0")
+        if not (0.0 <= self.censor_fraction <= 1.0):
+            raise ValueError("censor_fraction must be in [0, 1]")
+        if self.committee_size <= 0:
+            raise ValueError("committee_size must be > 0")
+        if self.slot_seconds <= 0:
+            raise ValueError("slot_seconds must be > 0")
+        if self.horizon_days <= 0:
+            raise ValueError("horizon_days must be > 0")
+        if self.epoch_slots <= 0:
+            raise ValueError("epoch_slots must be > 0")
+        if self.max_new_sequencers_per_epoch <= 0:
+            raise ValueError("max_new_sequencers_per_epoch must be > 0")
+        if self.delay_focus_x_max_usd <= self.delay_focus_x_min_usd:
+            raise ValueError("delay_focus_x_max_usd must be > delay_focus_x_min_usd")
+        if self.delay_focus_y_min_hours <= 0:
+            raise ValueError("delay_focus_y_min_hours must be > 0")
+        if self.delay_focus_y_max_hours <= self.delay_focus_y_min_hours:
+            raise ValueError("delay_focus_y_max_hours must be > delay_focus_y_min_hours")
+        if self.delay_focus_y_padding_ratio < 0:
+            raise ValueError("delay_focus_y_padding_ratio must be >= 0")
+        if not (0.0 < self.probability_near_one_margin < 1.0):
+            raise ValueError("probability_near_one_margin must be in (0, 1)")
 
     @property
     def usd_per_user_seq(self) -> float:
@@ -46,6 +79,8 @@ class Config:
     def user_seq_values(self) -> list[int]:
         # Always start at 0 user sequencers; choose an auto step for readability/perf.
         max_seq = self.max_user_sequencers
+        if max_seq <= 0:
+            return [0]
         step = max(1, max_seq // 250)
         values = list(range(0, max_seq + 1, step))
         if values[-1] != max_seq:
@@ -55,92 +90,195 @@ class Config:
 
 def max_censors_allowed(committee_size: int) -> int:
     # Honest proposer can include if censoring committee members are strictly below 1/3.
-    return math.ceil(committee_size / 3) - 1
+    return (committee_size - 1) // 3
 
 
-def hypergeom_cdf_max_successes(population: int, success_population: int, draws: int, max_successes: int) -> float:
-    if draws > population:
+def clamp_probability(value: float) -> float:
+    if value <= 0.0:
         return 0.0
-    denom = math.comb(population, draws)
-    lo = max(0, draws - (population - success_population))
-    hi = min(draws, success_population, max_successes)
-    total = 0
-    for x in range(lo, hi + 1):
-        total += math.comb(success_population, x) * math.comb(population - success_population, draws - x)
-    return total / denom
+    if value >= 1.0:
+        return 1.0
+    return value
 
 
-def committee_censor_distribution(
-    cfg: Config, user_seq: int, committee_size: int | None = None
-) -> list[tuple[int, float]]:
-    k = cfg.committee_size if committee_size is None else committee_size
-    total_seq = cfg.base_sequencers + user_seq
-    censors = int(round(cfg.base_sequencers * cfg.censor_fraction))
-    if k > total_seq:
-        return []
-    denom = math.comb(total_seq, k)
-    lo = max(0, k - (total_seq - censors))
-    hi = min(k, censors)
-    dist: list[tuple[int, float]] = []
-    for c in range(lo, hi + 1):
-        p = (math.comb(censors, c) * math.comb(total_seq - censors, k - c)) / denom
-        dist.append((c, p))
-    return dist
+def _log_choose(n: int, k: int) -> float:
+    if k < 0 or k > n:
+        return float("-inf")
+    return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
 
 
-def p_non_committee_slot(cfg: Config, user_seq: int) -> float:
-    total_seq = cfg.base_sequencers + user_seq
-    censors = int(round(cfg.base_sequencers * cfg.censor_fraction))
-    honest_non_user = cfg.base_sequencers - censors
-    return (user_seq + honest_non_user) / total_seq
+class SimulationModel:
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        censors = int(round(cfg.base_sequencers * cfg.censor_fraction))
+        self.initial_censors = min(max(censors, 0), cfg.base_sequencers)
+        self.initial_honest = cfg.base_sequencers - self.initial_censors
+        self._committee_factor_cache: dict[tuple[int, int, int], tuple[float, float, float]] = {}
+
+    def p_non_committee_slot(self, user_seq: int) -> float:
+        total_seq = self.cfg.base_sequencers + user_seq
+        if total_seq <= 0:
+            return 0.0
+        return clamp_probability((user_seq + self.initial_honest) / total_seq)
+
+    def _committee_distribution(self, total_seq: int, committee_size: int) -> list[tuple[int, float]]:
+        if committee_size > total_seq:
+            return []
+
+        censor_seq = self.initial_censors
+        honest_seq = total_seq - censor_seq
+        lo = max(0, committee_size - honest_seq)
+        hi = min(committee_size, censor_seq)
+        if lo > hi:
+            return []
+
+        log_p_lo = (
+            _log_choose(censor_seq, lo)
+            + _log_choose(honest_seq, committee_size - lo)
+            - _log_choose(total_seq, committee_size)
+        )
+        p = math.exp(log_p_lo)
+        dist: list[tuple[int, float]] = []
+        for c in range(lo, hi + 1):
+            dist.append((c, p))
+            if c == hi:
+                break
+            numer = (censor_seq - c) * (committee_size - c)
+            denom = (c + 1) * (honest_seq - committee_size + c + 1)
+            p *= numer / denom
+        return dist
+
+    def committee_epoch_factors(
+        self,
+        user_seq: int,
+        slots_in_epoch: int,
+        committee_size: int | None = None,
+    ) -> tuple[float, float, float]:
+        k = self.cfg.committee_size if committee_size is None else committee_size
+        cache_key = (user_seq, slots_in_epoch, k)
+        cached = self._committee_factor_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        total_seq = self.cfg.base_sequencers + user_seq
+        if k > total_seq:
+            result = (1.0, float(slots_in_epoch), 0.0)
+            self._committee_factor_cache[cache_key] = result
+            return result
+
+        max_c = max_censors_allowed(k)
+        p_allow = 0.0
+        f_total = 0.0
+        g_total = 0.0
+        mass = 0.0
+
+        for censor_committee, p in self._committee_distribution(total_seq, k):
+            mass += p
+            miss = censor_committee / k
+            if censor_committee <= max_c:
+                p_allow += p
+                f = miss ** slots_in_epoch
+                g = geometric_sum(miss, slots_in_epoch)
+            else:
+                f = 1.0
+                g = float(slots_in_epoch)
+            f_total += p * f
+            g_total += p * g
+
+        if mass <= EPSILON:
+            result = (1.0, float(slots_in_epoch), 0.0)
+        else:
+            # Normalize minor floating-point drift from recurrence accumulation.
+            inv_mass = 1.0 / mass
+            result = (
+                f_total * inv_mass,
+                g_total * inv_mass,
+                clamp_probability(p_allow * inv_mass),
+            )
+        self._committee_factor_cache[cache_key] = result
+        return result
 
 
 def geometric_sum(r: float, n: int) -> float:
     if n <= 0:
         return 0.0
-    if abs(1.0 - r) < 1e-15:
+    if abs(1.0 - r) < EPSILON:
         return float(n)
-    return (1.0 - (r ** n)) / (1.0 - r)
+    return (1.0 - (r**n)) / (1.0 - r)
 
 
-def epoch_survival_factor_and_tail_sum(m: int, p_non: float, p_allow: float, committee_mode: bool) -> tuple[float, float]:
-    # f: survival multiplier after m slots in this epoch.
-    # g: sum_{j=0..m-1} P(T > start+j) / P(T > start).
-    miss = 1.0 - p_non
+def _epoch_factors(
+    model: SimulationModel,
+    active_user: int,
+    slots_in_epoch: int,
+    committee_mode: bool,
+    committee_size: int | None = None,
+) -> tuple[float, float]:
     if committee_mode:
-        f = (1.0 - p_allow) + p_allow * (miss ** m)
-        g = m * (1.0 - p_allow) + p_allow * geometric_sum(miss, m)
-    else:
-        f = miss ** m
-        g = geometric_sum(miss, m)
-    return f, g
+        f, g, _ = model.committee_epoch_factors(
+            user_seq=active_user,
+            slots_in_epoch=slots_in_epoch,
+            committee_size=committee_size,
+        )
+        return f, g
+
+    p_non = model.p_non_committee_slot(active_user)
+    miss = 1.0 - p_non
+    return miss**slots_in_epoch, geometric_sum(miss, slots_in_epoch)
 
 
-def committee_epoch_factors(cfg: Config, user_seq: int, m: int, committee_size: int | None = None) -> tuple[float, float, float]:
-    k = cfg.committee_size if committee_size is None else committee_size
-    dist = committee_censor_distribution(cfg, user_seq, committee_size=k)
-    if not dist:
-        return 1.0, float(m), 0.0
+def _active_user_for_epoch(cfg: Config, target_user_seq: int, epoch_idx: int) -> int:
+    return min(target_user_seq, epoch_idx * cfg.max_new_sequencers_per_epoch)
 
-    max_c = max_censors_allowed(k)
-    f_total = 0.0
-    g_total = 0.0
-    p_allow = 0.0
-    for c, p in dist:
-        allow = c <= max_c
-        if allow:
-            p_allow += p
-            h = k - c
-            p_non_from_committee = h / k
-            miss = 1.0 - p_non_from_committee
-            f = miss ** m
-            g = geometric_sum(miss, m)
-        else:
-            f = 1.0
-            g = float(m)
-        f_total += p * f
-        g_total += p * g
-    return f_total, g_total, p_allow
+
+def _horizon_log_survival(
+    cfg: Config,
+    model: SimulationModel,
+    target_user_seq: int,
+    committee_mode: bool,
+    slots: int,
+    committee_size: int | None = None,
+) -> float:
+    if slots <= 0:
+        return 0.0
+
+    log_survival = 0.0
+    epochs = (slots + cfg.epoch_slots - 1) // cfg.epoch_slots
+    for epoch_idx in range(epochs):
+        start_slot = epoch_idx * cfg.epoch_slots
+        slots_in_epoch = min(cfg.epoch_slots, slots - start_slot)
+        active_user = _active_user_for_epoch(cfg, target_user_seq, epoch_idx)
+        f, _ = _epoch_factors(
+            model=model,
+            active_user=active_user,
+            slots_in_epoch=slots_in_epoch,
+            committee_mode=committee_mode,
+            committee_size=committee_size,
+        )
+        if f <= 0.0:
+            return float("-inf")
+        log_survival += math.log(f)
+    return log_survival
+
+
+def _horizon_probability_from_log_survival(log_survival: float) -> float:
+    if math.isinf(log_survival) and log_survival < 0:
+        return 1.0
+    p = -math.expm1(log_survival)
+    if abs(p) < EPSILON:
+        return 0.0
+    return clamp_probability(p)
+
+
+def _effective_per_slot_from_log_survival(log_survival: float, slots: int) -> float:
+    if slots <= 0:
+        return 0.0
+    if math.isinf(log_survival) and log_survival < 0:
+        return 1.0
+    p = -math.expm1(log_survival / slots)
+    if abs(p) < EPSILON:
+        return 0.0
+    return clamp_probability(p)
 
 
 def horizon_prob_with_churn(
@@ -149,56 +287,59 @@ def horizon_prob_with_churn(
     committee_mode: bool,
     slots: int,
     committee_size: int | None = None,
+    model: SimulationModel | None = None,
 ) -> float:
-    log_survival = 0.0
-    epochs = (slots + cfg.epoch_slots - 1) // cfg.epoch_slots
-    for e in range(epochs):
-        m = min(cfg.epoch_slots, slots - e * cfg.epoch_slots)
-        active_user = min(target_user_seq, e * cfg.max_new_sequencers_per_epoch)
-        if committee_mode:
-            f, _, _ = committee_epoch_factors(cfg, active_user, m, committee_size=committee_size)
-        else:
-            p_non = p_non_committee_slot(cfg, active_user)
-            miss = 1.0 - p_non
-            f = miss ** m
-        if f <= 0.0:
-            return 1.0
-        log_survival += math.log(f)
-    p = -math.expm1(log_survival)
-    return 0.0 if abs(p) < 1e-15 else p
+    if model is None:
+        model = SimulationModel(cfg)
+    log_survival = _horizon_log_survival(
+        cfg=cfg,
+        model=model,
+        target_user_seq=target_user_seq,
+        committee_mode=committee_mode,
+        slots=slots,
+        committee_size=committee_size,
+    )
+    return _horizon_probability_from_log_survival(log_survival)
 
 
-def expected_delay_hours_with_churn(cfg: Config, target_user_seq: int, committee_mode: bool) -> float:
+def expected_delay_hours_with_churn(
+    cfg: Config,
+    target_user_seq: int,
+    committee_mode: bool,
+    committee_size: int | None = None,
+    model: SimulationModel | None = None,
+) -> float:
+    if model is None:
+        model = SimulationModel(cfg)
     # E[T] for time-varying Bernoulli process:
     # E[T_slots] = sum_{s>=0} P(T_slots > s)
     epochs_to_full = math.ceil(target_user_seq / cfg.max_new_sequencers_per_epoch)
-    full_onboard_slot = epochs_to_full * cfg.epoch_slots
 
     survival = 1.0
     expected_slots = 0.0
 
     # Onboarding phase (parameters change per epoch).
-    for e in range(epochs_to_full):
-        active_user = min(target_user_seq, e * cfg.max_new_sequencers_per_epoch)
-        if committee_mode:
-            f, g, _ = committee_epoch_factors(cfg, active_user, cfg.epoch_slots)
-        else:
-            p_non = p_non_committee_slot(cfg, active_user)
-            miss = 1.0 - p_non
-            f = miss ** cfg.epoch_slots
-            g = geometric_sum(miss, cfg.epoch_slots)
+    for epoch_idx in range(epochs_to_full):
+        active_user = _active_user_for_epoch(cfg, target_user_seq, epoch_idx)
+        f, g = _epoch_factors(
+            model=model,
+            active_user=active_user,
+            slots_in_epoch=cfg.epoch_slots,
+            committee_mode=committee_mode,
+            committee_size=committee_size,
+        )
         expected_slots += survival * g
         survival *= f
 
     # Steady state after full onboarding (same parameters every epoch).
-    if committee_mode:
-        f_final, g_final, _ = committee_epoch_factors(cfg, target_user_seq, cfg.epoch_slots)
-    else:
-        p_non_final = p_non_committee_slot(cfg, target_user_seq)
-        miss_final = 1.0 - p_non_final
-        f_final = miss_final ** cfg.epoch_slots
-        g_final = geometric_sum(miss_final, cfg.epoch_slots)
-    if f_final >= 1.0 - 1e-15:
+    f_final, g_final = _epoch_factors(
+        model=model,
+        active_user=target_user_seq,
+        slots_in_epoch=cfg.epoch_slots,
+        committee_mode=committee_mode,
+        committee_size=committee_size,
+    )
+    if f_final >= 1.0 - EPSILON:
         return float("inf")
     expected_slots += survival * g_final / (1.0 - f_final)
     return expected_slots * (cfg.slot_seconds / 3600.0)
@@ -210,26 +351,19 @@ def effective_per_slot_with_churn(
     committee_mode: bool,
     slots: int,
     committee_size: int | None = None,
+    model: SimulationModel | None = None,
 ) -> float:
-    if slots <= 0:
-        return 0.0
-    log_survival = 0.0
-    epochs = (slots + cfg.epoch_slots - 1) // cfg.epoch_slots
-    for e in range(epochs):
-        m = min(cfg.epoch_slots, slots - e * cfg.epoch_slots)
-        active_user = min(target_user_seq, e * cfg.max_new_sequencers_per_epoch)
-        if committee_mode:
-            f, _, _ = committee_epoch_factors(cfg, active_user, m, committee_size=committee_size)
-        else:
-            p_non = p_non_committee_slot(cfg, active_user)
-            miss = 1.0 - p_non
-            f = miss ** m
-        if f <= 0.0:
-            return 1.0
-        log_survival += math.log(f)
-    # Equivalent constant per-slot probability over the same horizon.
-    p = -math.expm1(log_survival / slots)
-    return 0.0 if abs(p) < 1e-15 else p
+    if model is None:
+        model = SimulationModel(cfg)
+    log_survival = _horizon_log_survival(
+        cfg=cfg,
+        model=model,
+        target_user_seq=target_user_seq,
+        committee_mode=committee_mode,
+        slots=slots,
+        committee_size=committee_size,
+    )
+    return _effective_per_slot_from_log_survival(log_survival, slots)
 
 
 def _polyline(xs: list[float], ys: list[float], x_min: float, x_max: float, y_min: float, y_max: float) -> str:
@@ -256,8 +390,12 @@ def write_svg_line_chart(
     x_ticks_usd_and_seq: bool = False,
     usd_per_seq: float = 1.0,
 ) -> None:
+    if not xs:
+        raise ValueError("xs must not be empty")
     x_min = min(xs) if x_min is None else x_min
     x_max = max(xs) if x_max is None else x_max
+    if x_max <= x_min:
+        raise ValueError("x_max must be greater than x_min")
 
     filtered: list[tuple[list[float], list[float]]] = []
     all_y: list[float] = []
@@ -273,6 +411,14 @@ def write_svg_line_chart(
 
     y_min = min(all_y) if y_min is None else y_min
     y_max = max(all_y) if y_max is None else y_max
+    if y_max <= y_min:
+        raise ValueError("y_max must be greater than y_min")
+    if x_ticks_usd_and_seq and usd_per_seq <= 0:
+        raise ValueError("usd_per_seq must be > 0 when x_ticks_usd_and_seq is enabled")
+
+    title_xml = html.escape(title)
+    x_label_xml = html.escape(x_label)
+    y_label_xml = html.escape(y_label)
 
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -280,9 +426,9 @@ def write_svg_line_chart(
         '<rect x="0" y="0" width="1200" height="640" fill="white"/>',
         '<line x1="80" y1="560" x2="1100" y2="560" stroke="black" stroke-width="2"/>',
         '<line x1="80" y1="560" x2="80" y2="40" stroke="black" stroke-width="2"/>',
-        f'<text x="600" y="24" font-family="sans-serif" font-size="20" text-anchor="middle">{title}</text>',
-        f'<text x="600" y="620" font-family="sans-serif" font-size="16" text-anchor="middle">{x_label}</text>',
-        f'<text x="20" y="300" font-family="sans-serif" font-size="16" text-anchor="middle" transform="rotate(-90,20,300)">{y_label}</text>',
+        f'<text x="600" y="24" font-family="sans-serif" font-size="20" text-anchor="middle">{title_xml}</text>',
+        f'<text x="600" y="620" font-family="sans-serif" font-size="16" text-anchor="middle">{x_label_xml}</text>',
+        f'<text x="20" y="300" font-family="sans-serif" font-size="16" text-anchor="middle" transform="rotate(-90,20,300)">{y_label_xml}</text>',
     ]
 
     for i, (name, _, color, dash) in enumerate(series):
@@ -295,7 +441,10 @@ def write_svg_line_chart(
             f'<polyline fill="none" stroke="{color}" stroke-width="2"{dash_attr} '
             f'points="{_polyline(fxs, capped, x_min, x_max, y_min, y_max)}"/>'
         )
-        lines.append(f'<text x="860" y="{70 + i * 24}" font-family="sans-serif" font-size="14" fill="{color}">{name}</text>')
+        lines.append(
+            f'<text x="860" y="{70 + i * 24}" font-family="sans-serif" '
+            f'font-size="14" fill="{color}">{html.escape(name)}</text>'
+        )
 
     for i in range(6):
         tx_val = x_min + (x_max - x_min) * i / 5
@@ -319,6 +468,9 @@ def write_svg_line_chart(
 
 
 def run(cfg: Config) -> None:
+    cfg.validate()
+    model = SimulationModel(cfg)
+
     slots = cfg.horizon_slots
     usd_per_seq = cfg.usd_per_user_seq
     horizon_label = f"{cfg.horizon_days} day" if cfg.horizon_days == 1 else f"{cfg.horizon_days} days"
@@ -332,9 +484,24 @@ def run(cfg: Config) -> None:
     for user_seq in cfg.user_seq_values:
         invested_token = user_seq * cfg.stake_per_sequencer_token
         invested_usd = invested_token * cfg.token_usd
-        _, _, p_allow = committee_epoch_factors(cfg, user_seq, cfg.epoch_slots)
-        p_horizon_non = horizon_prob_with_churn(cfg, user_seq, committee_mode=False, slots=slots)
-        p_horizon_com = horizon_prob_with_churn(cfg, user_seq, committee_mode=True, slots=slots)
+        _, _, p_allow = model.committee_epoch_factors(user_seq=user_seq, slots_in_epoch=cfg.epoch_slots)
+
+        log_survival_non = _horizon_log_survival(
+            cfg=cfg,
+            model=model,
+            target_user_seq=user_seq,
+            committee_mode=False,
+            slots=slots,
+        )
+        log_survival_com = _horizon_log_survival(
+            cfg=cfg,
+            model=model,
+            target_user_seq=user_seq,
+            committee_mode=True,
+            slots=slots,
+        )
+        p_horizon_non = _horizon_probability_from_log_survival(log_survival_non)
+        p_horizon_com = _horizon_probability_from_log_survival(log_survival_com)
 
         rows.append(
             {
@@ -344,10 +511,20 @@ def run(cfg: Config) -> None:
                 "p_committee_allows_honest": p_allow,
                 p_horizon_non_key: p_horizon_non,
                 p_horizon_com_key: p_horizon_com,
-                p_eff_non_key: effective_per_slot_with_churn(cfg, user_seq, committee_mode=False, slots=slots),
-                p_eff_com_key: effective_per_slot_with_churn(cfg, user_seq, committee_mode=True, slots=slots),
-                "expected_hours_non_committee": expected_delay_hours_with_churn(cfg, user_seq, committee_mode=False),
-                "expected_hours_committee": expected_delay_hours_with_churn(cfg, user_seq, committee_mode=True),
+                p_eff_non_key: _effective_per_slot_from_log_survival(log_survival_non, slots),
+                p_eff_com_key: _effective_per_slot_from_log_survival(log_survival_com, slots),
+                "expected_hours_non_committee": expected_delay_hours_with_churn(
+                    cfg=cfg,
+                    model=model,
+                    target_user_seq=user_seq,
+                    committee_mode=False,
+                ),
+                "expected_hours_committee": expected_delay_hours_with_churn(
+                    cfg=cfg,
+                    model=model,
+                    target_user_seq=user_seq,
+                    committee_mode=True,
+                ),
             }
         )
 
