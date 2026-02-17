@@ -44,9 +44,11 @@ Epoch-level inclusion (for an epoch with `m` slots):
   - `max_user_sequencers = floor(horizon_slots / epoch_slots) * max_new_sequencers_per_epoch`
 
 ## Time Horizon
-- Central control: `horizon_days`.
+- Central control: `max_horizon_days`.
 - Derived slots:
-  - `horizon_slots = floor(horizon_days * 24 * 3600 / slot_seconds)`.
+  - `horizon_slots = floor(max_horizon_days * 24 * 3600 / slot_seconds)`.
+  - In the web app, cumulative plot can stop early once both modes reach `1 - probability_near_one_margin`.
+  - Per-slot and delay plots keep the full `max_horizon_days` range.
 
 ## Outputs
 - `results/cr_simulation.csv`
@@ -54,7 +56,7 @@ Epoch-level inclusion (for an epoch with `m` slots):
 - `figures/cr_per_slot_probability_vs_stake.svg`
 - `figures/cr_expected_delay_vs_stake.svg`
 
-## Config Reference (`sim/cr_simulation.py`)
+## Config Reference (`web/app.js`)
 
 - `base_sequencers`: initial sequencer count in the network.
 - `stake_per_sequencer_token`: stake required per sequencer identity.
@@ -62,10 +64,10 @@ Epoch-level inclusion (for an epoch with `m` slots):
 - `censor_fraction`: fraction of initial network that censors.
 - `committee_size`: committee size `k`.
 - `slot_seconds`: slot duration.
-- `horizon_days`: analysis horizon in days (main control knob).
+- `max_horizon_days`: maximum analysis horizon in days (upper bound for all web chart ranges).
 - `epoch_slots`: slots per epoch (onboarding cadence).
 - `max_new_sequencers_per_epoch`: user onboarding throughput.
-- `probability_near_one_margin`: x-axis auto-crop threshold for probability chart; crop begins once both curves are within this margin of 1.
+- `probability_near_one_margin`: stopping threshold for cumulative horizon search; cumulative plot stops once both curves are within this margin of 1 (unless `max_horizon_days` is hit first).
 
 Delay chart scaling:
 - x/y bounds are auto-derived from generated data (finite delay values), with small padding only when a bound would collapse to a single point.
@@ -79,8 +81,9 @@ python sim/cr_simulation.py
 ## Static Web App
 - Open `web/index.html` in a browser (or serve `web/` with any static server).
 - Charts use Plotly for interactivity (zoom, pan, reset, legend toggles, image export).
+- Includes a cumulative inclusion chart over elapsed time; x-ticks show derived invested USD and user sequencer count under the "only user onboarding" assumption.
+- Effective per-slot chart uses elapsed-time x-ticks in the same format, but always spans full `max_horizon_days`.
 - Actions:
   - `Run Simulation`: recompute charts and in-memory table.
   - `Reset Defaults`: restore default config values.
   - `Download CSV`: export current results as `cr_simulation.csv`.
-  - Chart settings allow marker toggles, full x-range for probability chart, and log-scale for delay chart.

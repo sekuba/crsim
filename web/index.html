@@ -34,8 +34,8 @@
         <label>slot_seconds
           <input name="slot_seconds" type="number" min="1" step="1" required>
         </label>
-        <label>horizon_days
-          <input name="horizon_days" type="number" min="1" step="1" required>
+        <label>max_horizon_days
+          <input name="max_horizon_days" type="number" min="1" step="1" required>
         </label>
         <label>epoch_slots
           <input name="epoch_slots" type="number" min="1" step="1" required>
@@ -45,21 +45,6 @@
         </label>
         <label>probability_near_one_margin
           <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
-        </label>
-      </form>
-      <h3>Chart Settings</h3>
-      <form id="chart-form" class="chart-grid">
-        <label class="check">
-          <input name="show_markers" type="checkbox">
-          show markers
-        </label>
-        <label class="check">
-          <input name="probability_full_x" type="checkbox">
-          full x-range for probability chart
-        </label>
-        <label class="check">
-          <input name="delay_log_scale" type="checkbox">
-          log-scale y-axis for delay chart
         </label>
       </form>
       <div class="actions">
@@ -72,19 +57,21 @@
     </section>
 
     <section class="panel">
-      <h2>Inclusion vs. Stake</h2>
-      <div id="chart-probability" class="chart-wrap"></div>
+      <h2>Cumulative Inclusion Over Time</h2>
+      <div id="chart-cumulative" class="chart-wrap"></div>
+      <p class="note">X-axis shows elapsed days with derived invested stake and user sequencer count in tick labels. Range expands until both curves reach 1 - probability_near_one_margin, bounded by max_horizon_days.</p>
     </section>
 
     <section class="panel">
       <h2>Per-slot Inclusion</h2>
       <div id="chart-per-slot" class="chart-wrap"></div>
+      <p class="note">Per-slot chart spans the full max_horizon_days range.</p>
     </section>
 
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">Delay chart y-axis is capped at 30 days (720h). Values above the cap are hidden.</p>
+      <p class="note">Delay chart x-range uses the full max_horizon_days sequencer range. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>

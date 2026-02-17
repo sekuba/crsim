@@ -2,6 +2,8 @@
 
 const EPSILON = 1e-15;
 const DELAY_Y_CAP_HOURS = 30 * 24;
+const COMMITTEE_COLOR = "#2563EB";
+const NON_COMMITTEE_COLOR = "#F97316";
 
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
@@ -10,16 +12,10 @@ const DEFAULT_CONFIG = {
   censor_fraction: 1.0,
   committee_size: 24,
   slot_seconds: 72,
-  horizon_days: 30,
+  max_horizon_days: 30,
   epoch_slots: 32,
   max_new_sequencers_per_epoch: 4,
   probability_near_one_margin: 0.001,
-};
-
-const DEFAULT_CHART_SETTINGS = {
-  show_markers: false,
-  probability_full_x: false,
-  delay_log_scale: false,
 };
 
 const INTEGER_FIELDS = new Set([
@@ -27,19 +23,18 @@ const INTEGER_FIELDS = new Set([
   "stake_per_sequencer_token",
   "committee_size",
   "slot_seconds",
-  "horizon_days",
+  "max_horizon_days",
   "epoch_slots",
   "max_new_sequencers_per_epoch",
 ]);
 
 const formEl = document.getElementById("config-form");
-const chartFormEl = document.getElementById("chart-form");
 const statusEl = document.getElementById("status");
 const summaryEl = document.getElementById("summary");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
 const csvBtn = document.getElementById("csv-btn");
-const probabilityChartEl = document.getElementById("chart-probability");
+const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
 
@@ -136,8 +131,8 @@ function validateConfig(cfg) {
   if (cfg.slot_seconds <= 0) {
     errors.push("slot_seconds must be > 0");
   }
-  if (cfg.horizon_days <= 0) {
-    errors.push("horizon_days must be > 0");
+  if (cfg.max_horizon_days <= 0) {
+    errors.push("max_horizon_days must be > 0");
   }
   if (cfg.epoch_slots <= 0) {
     errors.push("epoch_slots must be > 0");
@@ -151,15 +146,15 @@ function validateConfig(cfg) {
   return errors;
 }
 
-function horizonSlots(cfg) {
-  return Math.floor((cfg.horizon_days * 24 * 3600) / cfg.slot_seconds);
+function maxHorizonSlots(cfg) {
+  return Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
 }
 
 function maxUserSequencers(cfg) {
-  return Math.floor(horizonSlots(cfg) / cfg.epoch_slots) * cfg.max_new_sequencers_per_epoch;
+  return Math.floor(maxHorizonSlots(cfg) / cfg.epoch_slots) * cfg.max_new_sequencers_per_epoch;
 }
 
-function userSeqValues(cfg) {
+function maxHorizonUserSeqValues(cfg) {
   const maxSeq = maxUserSequencers(cfg);
   if (maxSeq <= 0) {
     return [0];
@@ -352,11 +347,74 @@ function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, c
   return expectedSlots * (cfg.slot_seconds / 3600.0);
 }
 
-function runSimulation(cfg) {
-  const slots = horizonSlots(cfg);
+function buildTimeSeries(cfg, model) {
+  const maxSlots = maxHorizonSlots(cfg);
+  const maxEpochs = Math.floor((maxSlots + cfg.epoch_slots - 1) / cfg.epoch_slots);
   const usdPerSeq = cfg.stake_per_sequencer_token * cfg.token_usd;
-  const horizonLabel = cfg.horizon_days === 1 ? "1 day" : `${cfg.horizon_days} days`;
-  const horizonTag = `${cfg.horizon_days}d`;
+
+  const days = [0.0];
+  const invested = [0.0];
+  const userSeq = [0];
+  const nonProbs = [0.0];
+  const comProbs = [0.0];
+  const nonEffPerSlot = [0.0];
+  const comEffPerSlot = [0.0];
+
+  let logSurvivalNon = 0.0;
+  let logSurvivalCom = 0.0;
+  let elapsedSlots = 0;
+
+  for (let epochIdx = 0; epochIdx < maxEpochs; epochIdx += 1) {
+    const slotsInEpoch = Math.min(cfg.epoch_slots, maxSlots - elapsedSlots);
+    if (slotsInEpoch <= 0) {
+      break;
+    }
+    const activeUser = epochIdx * cfg.max_new_sequencers_per_epoch;
+    const [fNon] = epochFactors(model, activeUser, slotsInEpoch, false);
+    const [fCom] = epochFactors(model, activeUser, slotsInEpoch, true);
+
+    if (fNon <= 0.0) {
+      logSurvivalNon = Number.NEGATIVE_INFINITY;
+    } else if (Number.isFinite(logSurvivalNon)) {
+      logSurvivalNon += Math.log(fNon);
+    }
+
+    if (fCom <= 0.0) {
+      logSurvivalCom = Number.NEGATIVE_INFINITY;
+    } else if (Number.isFinite(logSurvivalCom)) {
+      logSurvivalCom += Math.log(fCom);
+    }
+
+    elapsedSlots += slotsInEpoch;
+    const completedEpochs = Math.floor(elapsedSlots / cfg.epoch_slots);
+    const currentUserSeq = completedEpochs * cfg.max_new_sequencers_per_epoch;
+    days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
+    invested.push(currentUserSeq * usdPerSeq);
+    userSeq.push(currentUserSeq);
+
+    const pNon = horizonProbabilityFromLogSurvival(logSurvivalNon);
+    const pCom = horizonProbabilityFromLogSurvival(logSurvivalCom);
+    nonProbs.push(pNon);
+    comProbs.push(pCom);
+    nonEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalNon, elapsedSlots));
+    comEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalCom, elapsedSlots));
+  }
+
+  return {
+    days,
+    invested,
+    userSeq,
+    nonProbs,
+    comProbs,
+    nonEffPerSlot,
+    comEffPerSlot,
+  };
+}
+
+function runSimulation(cfg) {
+  const slots = maxHorizonSlots(cfg);
+  const usdPerSeq = cfg.stake_per_sequencer_token * cfg.token_usd;
+  const horizonTag = `${cfg.max_horizon_days}d`;
   const pHorizonNonKey = `p_${horizonTag}_non_committee_with_churn_exact`;
   const pHorizonComKey = `p_${horizonTag}_committee_with_churn_exact`;
   const pEffNonKey = `p_eff_${horizonTag}_non_committee_per_slot`;
@@ -365,7 +423,8 @@ function runSimulation(cfg) {
   const model = new SimulationModel(cfg);
   const rows = [];
 
-  for (const userSeq of userSeqValues(cfg)) {
+  // Keep row sampling on the full max-horizon range; cumulative charts may stop earlier.
+  for (const userSeq of maxHorizonUserSeqValues(cfg)) {
     const investedToken = userSeq * cfg.stake_per_sequencer_token;
     const investedUsd = investedToken * cfg.token_usd;
     const [, , pAllow] = model.committeeEpochFactors(userSeq, cfg.epoch_slots);
@@ -388,26 +447,8 @@ function runSimulation(cfg) {
   }
 
   const invested = rows.map((r) => Number(r.invested_stake_usd));
-  const nonProbs = rows.map((r) => Number(r[pHorizonNonKey]));
-  const comProbs = rows.map((r) => Number(r[pHorizonComKey]));
-  const nonPerSlot = rows.map((r) => Number(r[pEffNonKey]));
-  const comPerSlot = rows.map((r) => Number(r[pEffComKey]));
   const nonDelay = rows.map((r) => r.expected_hours_non_committee);
   const comDelay = rows.map((r) => r.expected_hours_committee);
-
-  const nearOneThreshold = 1.0 - cfg.probability_near_one_margin;
-  const unsaturated = [];
-  for (let i = 0; i < nonProbs.length; i += 1) {
-    if (nonProbs[i] < nearOneThreshold || comProbs[i] < nearOneThreshold) {
-      unsaturated.push(i);
-    }
-  }
-
-  let probabilityXMax = invested[invested.length - 1];
-  if (unsaturated.length) {
-    const idx = Math.min(invested.length - 1, unsaturated[unsaturated.length - 1] + 1);
-    probabilityXMax = invested[idx];
-  }
 
   const finiteDelayValues = rows
     .flatMap((r) => [r.expected_hours_non_committee, r.expected_hours_committee])
@@ -427,29 +468,54 @@ function runSimulation(cfg) {
     }
   }
 
+  const timeSeries = buildTimeSeries(cfg, model);
+  const targetProbability = 1.0 - cfg.probability_near_one_margin;
+  let cumulativeEndIdx = timeSeries.days.length - 1;
+  let cumulativeReachedTarget = false;
+  for (let i = 0; i < timeSeries.days.length; i += 1) {
+    if (timeSeries.nonProbs[i] >= targetProbability && timeSeries.comProbs[i] >= targetProbability) {
+      cumulativeEndIdx = i;
+      cumulativeReachedTarget = true;
+      break;
+    }
+  }
+  const toCumulativeSlice = (values) => values.slice(0, cumulativeEndIdx + 1);
+
   return {
     rows,
     meta: {
-      slots,
-      horizonLabel,
+      maxHorizonSlots: slots,
       horizonTag,
       usdPerSeq,
+      slotSeconds: cfg.slot_seconds,
+      epochSlots: cfg.epoch_slots,
+      maxNewSequencersPerEpoch: cfg.max_new_sequencers_per_epoch,
       maxUserSequencers: maxUserSequencers(cfg),
       userPointCount: rows.length,
-      probabilityXMax,
       delayXMin,
       delayXMax,
       delayYMin,
       delayYMax,
+      cumulativeReachedTarget,
+      cumulativeTargetProbability: targetProbability,
+      cumulativeXMaxDays: timeSeries.days[cumulativeEndIdx],
+      cumulativeEndNonProb: timeSeries.nonProbs[cumulativeEndIdx],
+      cumulativeEndComProb: timeSeries.comProbs[cumulativeEndIdx],
     },
     series: {
       invested,
-      nonProbs,
-      comProbs,
-      nonPerSlot,
-      comPerSlot,
       nonDelay,
       comDelay,
+      cumulativeDays: toCumulativeSlice(timeSeries.days),
+      cumulativeInvested: toCumulativeSlice(timeSeries.invested),
+      cumulativeUserSeq: toCumulativeSlice(timeSeries.userSeq),
+      cumulativeNonProbs: toCumulativeSlice(timeSeries.nonProbs),
+      cumulativeComProbs: toCumulativeSlice(timeSeries.comProbs),
+      perSlotDays: timeSeries.days,
+      perSlotInvested: timeSeries.invested,
+      perSlotUserSeq: timeSeries.userSeq,
+      perSlotNonEffPerSlot: timeSeries.nonEffPerSlot,
+      perSlotComEffPerSlot: timeSeries.comEffPerSlot,
     },
   };
 }
@@ -461,6 +527,32 @@ function buildUsdSeqTicks(xMin, xMax, usdPerSeq) {
     const value = xMin + ((xMax - xMin) * i) / 5;
     values.push(value);
     labels.push(`$${Math.round(value).toLocaleString()} [${Math.round(value / usdPerSeq)}]`);
+  }
+  return { values, labels };
+}
+
+function formatDayTickLabel(days) {
+  if (days >= 100) {
+    return String(Math.round(days));
+  }
+  if (days >= 10) {
+    return days.toFixed(1);
+  }
+  return days.toFixed(2);
+}
+
+function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNewPerEpoch, usdPerSeq) {
+  const values = [];
+  const labels = [];
+  for (let i = 0; i <= 5; i += 1) {
+    const dayValue = xMinDays + ((xMaxDays - xMinDays) * i) / 5;
+    values.push(dayValue);
+
+    const slots = Math.floor((dayValue * 24 * 3600) / slotSeconds);
+    const epochs = Math.max(0, Math.floor(slots / epochSlots));
+    const seq = epochs * maxNewPerEpoch;
+    const usd = seq * usdPerSeq;
+    labels.push(`${formatDayTickLabel(dayValue)}d | $${Math.round(usd).toLocaleString()} [${seq}]`);
   }
   return { values, labels };
 }
@@ -510,86 +602,108 @@ function baseLayout(title, xLabel, yLabel, xRange, yRange, xTicks) {
   };
 }
 
-function renderCharts(output, chartSettings) {
+function renderCharts(output) {
   if (!window.Plotly) {
     throw new Error("Plotly failed to load. Check internet/CDN access.");
   }
 
-  const markerMode = chartSettings.show_markers ? "lines+markers" : "lines";
-  const invested = output.series.invested;
-
-  const probabilityXMin = Math.min(...invested);
-  const probabilityXMax = chartSettings.probability_full_x
-    ? Math.max(...invested)
-    : output.meta.probabilityXMax;
-  const probabilityXTicks = buildUsdSeqTicks(probabilityXMin, probabilityXMax, output.meta.usdPerSeq);
-
-  const probabilityLayout = baseLayout(
-    `Inclusion vs. Stake Over ${output.meta.horizonLabel[0].toUpperCase()}${output.meta.horizonLabel.slice(1)}`,
-    "Invested stake in USD [user sequencers]",
-    `Inclusion probability within ${output.meta.horizonLabel}`,
-    [probabilityXMin, probabilityXMax],
-    [0, 1],
-    probabilityXTicks
+  const cumulativeDays = output.series.cumulativeDays;
+  const cumulativeTicks = buildTimeStakeTicks(
+    Math.min(...cumulativeDays),
+    Math.max(...cumulativeDays),
+    output.meta.slotSeconds,
+    output.meta.epochSlots,
+    output.meta.maxNewSequencersPerEpoch,
+    output.meta.usdPerSeq
   );
-
-  const probabilityData = [
+  const cumulativeHover = cumulativeDays.map((day, idx) => {
+    const usd = Math.round(output.series.cumulativeInvested[idx]).toLocaleString();
+    const seq = output.series.cumulativeUserSeq[idx].toLocaleString();
+    return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
+  });
+  const cumulativeLayout = baseLayout(
+    "Cumulative Inclusion Probability Over Time",
+    "Elapsed days | invested stake in USD [user sequencers]",
+    "Cumulative inclusion probability",
+    [Math.min(...cumulativeDays), Math.max(...cumulativeDays)],
+    [0, 1],
+    cumulativeTicks
+  );
+  const cumulativeData = [
     {
-      x: invested,
-      y: output.series.comProbs,
-      mode: markerMode,
+      x: cumulativeDays,
+      y: output.series.cumulativeComProbs,
+      mode: "lines",
       name: "Committee",
-      line: { color: "#B02E0C", dash: "dash", width: 2 },
-      marker: { color: "#B02E0C", size: 4 },
+      text: cumulativeHover,
+      hovertemplate: "%{text}<br>Cumulative probability: %{y:.6f}<extra>Committee</extra>",
+      line: { color: COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
     {
-      x: invested,
-      y: output.series.nonProbs,
-      mode: markerMode,
+      x: cumulativeDays,
+      y: output.series.cumulativeNonProbs,
+      mode: "lines",
       name: "Non-committee",
-      line: { color: "#0B6E4F", width: 2 },
-      marker: { color: "#0B6E4F", size: 4 },
+      text: cumulativeHover,
+      hovertemplate: "%{text}<br>Cumulative probability: %{y:.6f}<extra>Non-committee</extra>",
+      line: { color: NON_COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
   ];
 
   const perSlotLayout = baseLayout(
-    `Per-slot Inclusion vs Invested Stake (${output.meta.horizonTag} horizon)`,
-    "Invested stake in USD [user sequencers]",
+    `Effective Per-slot Inclusion Over Time (${output.meta.horizonTag} max horizon)`,
+    "Elapsed days | invested stake in USD [user sequencers]",
     "Effective per-slot inclusion probability",
-    [Math.min(...invested), Math.max(...invested)],
+    [Math.min(...output.series.perSlotDays), Math.max(...output.series.perSlotDays)],
     [0, 1],
-    buildUsdSeqTicks(Math.min(...invested), Math.max(...invested), output.meta.usdPerSeq)
+    buildTimeStakeTicks(
+      Math.min(...output.series.perSlotDays),
+      Math.max(...output.series.perSlotDays),
+      output.meta.slotSeconds,
+      output.meta.epochSlots,
+      output.meta.maxNewSequencersPerEpoch,
+      output.meta.usdPerSeq
+    )
   );
+  const perSlotHover = output.series.perSlotDays.map((day, idx) => {
+    const usd = Math.round(output.series.perSlotInvested[idx]).toLocaleString();
+    const seq = output.series.perSlotUserSeq[idx].toLocaleString();
+    return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
+  });
 
   const perSlotData = [
     {
-      x: invested,
-      y: output.series.comPerSlot,
-      mode: markerMode,
+      x: output.series.perSlotDays,
+      y: output.series.perSlotComEffPerSlot,
+      mode: "lines",
       name: "Committee",
-      line: { color: "#B02E0C", dash: "dash", width: 2 },
-      marker: { color: "#B02E0C", size: 4 },
+      text: perSlotHover,
+      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Committee</extra>",
+      line: { color: COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
     {
-      x: invested,
-      y: output.series.nonPerSlot,
-      mode: markerMode,
+      x: output.series.perSlotDays,
+      y: output.series.perSlotNonEffPerSlot,
+      mode: "lines",
       name: "Non-committee",
-      line: { color: "#0B6E4F", width: 2 },
-      marker: { color: "#0B6E4F", size: 4 },
+      text: perSlotHover,
+      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Non-committee</extra>",
+      line: { color: NON_COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
   ];
 
+  const invested = output.series.invested;
+
   const delayXTicks = buildUsdSeqTicks(output.meta.delayXMin, output.meta.delayXMax, output.meta.usdPerSeq);
-  const delayYMin = chartSettings.delay_log_scale ? Math.max(output.meta.delayYMin, 0.001) : output.meta.delayYMin;
+  const delayYMin = output.meta.delayYMin;
   const delayYMax = output.meta.delayYMax;
 
   const delayLayout = baseLayout(
-    "Expected Inclusion Delay vs Invested Stake",
+    `Expected Inclusion Delay vs Invested Stake (${output.meta.horizonTag} max horizon range)`,
     "Invested stake in USD [user sequencers]",
     "Expected time to inclusion (hours)",
     [output.meta.delayXMin, output.meta.delayXMax],
@@ -597,32 +711,26 @@ function renderCharts(output, chartSettings) {
     delayXTicks
   );
 
-  if (chartSettings.delay_log_scale) {
-    delayLayout.yaxis.type = "log";
-  }
-
   const delayData = [
     {
       x: invested,
       y: toVisibleY(output.series.comDelay, delayYMin, delayYMax),
-      mode: markerMode,
+      mode: "lines",
       name: "Committee",
-      line: { color: "#B02E0C", dash: "dash", width: 2 },
-      marker: { color: "#B02E0C", size: 4 },
+      line: { color: COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
     {
       x: invested,
       y: toVisibleY(output.series.nonDelay, delayYMin, delayYMax),
-      mode: markerMode,
+      mode: "lines",
       name: "Non-committee",
-      line: { color: "#0B6E4F", width: 2 },
-      marker: { color: "#0B6E4F", size: 4 },
+      line: { color: NON_COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
   ];
 
-  Plotly.react(probabilityChartEl, probabilityData, probabilityLayout, plotConfig());
+  Plotly.react(cumulativeChartEl, cumulativeData, cumulativeLayout, plotConfig());
   Plotly.react(perSlotChartEl, perSlotData, perSlotLayout, plotConfig());
   Plotly.react(delayChartEl, delayData, delayLayout, plotConfig());
 }
@@ -668,29 +776,11 @@ function getConfigFromForm() {
   return cfg;
 }
 
-function getChartSettingsFromForm() {
-  const formData = new FormData(chartFormEl);
-  return {
-    show_markers: formData.get("show_markers") !== null,
-    probability_full_x: formData.get("probability_full_x") !== null,
-    delay_log_scale: formData.get("delay_log_scale") !== null,
-  };
-}
-
 function setFormValues(values) {
   for (const [key, value] of Object.entries(values)) {
     const input = formEl.elements.namedItem(key);
     if (input) {
       input.value = String(value);
-    }
-  }
-}
-
-function setChartFormValues(values) {
-  for (const [key, value] of Object.entries(values)) {
-    const input = chartFormEl.elements.namedItem(key);
-    if (input) {
-      input.checked = Boolean(value);
     }
   }
 }
@@ -718,13 +808,17 @@ function runFromForm() {
       throw new Error(errors.join(" | "));
     }
 
-    const chartSettings = getChartSettingsFromForm();
     const output = runSimulation(cfg);
     latestCsv = rowsToCsv(output.rows);
 
-    renderCharts(output, chartSettings);
+    renderCharts(output);
 
-    summaryEl.textContent = `Slots in horizon: ${output.meta.slots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Data points: ${output.meta.userPointCount.toLocaleString()}`;
+    const cumulativeTargetPct = (output.meta.cumulativeTargetProbability * 100).toFixed(3);
+    const cumulativeSummary = output.meta.cumulativeReachedTarget
+      ? `Cumulative >= ${cumulativeTargetPct}% by ${output.meta.cumulativeXMaxDays.toFixed(2)} days`
+      : `Cumulative at ${output.meta.cumulativeXMaxDays.toFixed(2)} days: committee ${(output.meta.cumulativeEndComProb * 100).toFixed(3)}%, non-committee ${(output.meta.cumulativeEndNonProb * 100).toFixed(3)}%`;
+    const assumptionsSummary = "Assumptions: all added sequencers are user sequencers; onboarding updates at epoch boundaries; initial censor share is fixed.";
+    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Data points: ${output.meta.userPointCount.toLocaleString()} | ${cumulativeSummary} | ${assumptionsSummary}`;
     setStatus("Simulation complete.");
   } catch (error) {
     setStatus(`Error: ${error.message}`, true);
@@ -734,7 +828,6 @@ function runFromForm() {
 runBtn.addEventListener("click", runFromForm);
 resetBtn.addEventListener("click", () => {
   setFormValues(DEFAULT_CONFIG);
-  setChartFormValues(DEFAULT_CHART_SETTINGS);
   runFromForm();
 });
 csvBtn.addEventListener("click", () => {
@@ -745,8 +838,5 @@ csvBtn.addEventListener("click", () => {
     downloadTextFile("cr_simulation.csv", latestCsv);
   }
 });
-chartFormEl.addEventListener("change", runFromForm);
-
 setFormValues(DEFAULT_CONFIG);
-setChartFormValues(DEFAULT_CHART_SETTINGS);
 runFromForm();
