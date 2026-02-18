@@ -158,6 +158,14 @@ input {
   color: #3f4955;
 }
 
+.config-grid label > small {
+  color: #6b7785;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
 .config-grid input {
   padding: 6px 8px;
   font-size: 13px;
@@ -237,6 +245,10 @@ button:hover {
 
   .config-grid label {
     font-size: 11px;
+  }
+
+  .config-grid label > small {
+    font-size: 9px;
   }
 
   .config-grid input {
