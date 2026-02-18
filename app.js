@@ -7,7 +7,7 @@ const NON_COMMITTEE_COLOR = "#F97316";
 
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
-  stake_per_sequencer_token: 20000,
+  stake_per_sequencer_token: 200000,
   token_usd: 0.02,
   censor_fraction: 1.0,
   committee_size: 24,
