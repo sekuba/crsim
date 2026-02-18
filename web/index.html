@@ -36,42 +36,53 @@
         <form id="config-form" class="grid config-grid">
           <label><span>Base sequencers</span>
             <input name="base_sequencers" type="number" min="0" step="1" required>
+            <small>sequencer count at the start of the sim</small>
           </label>
           <label><span>Stake / sequencer (token)</span>
             <input name="stake_per_sequencer_token" type="number" min="1" step="1" required>
+            <small>tokens needed to add 1 sequencer</small>
           </label>
           <label><span>Token USD</span>
             <input name="token_usd" type="number" min="0.0000001" step="any" required>
+            <small>1 token price in USD</small>
           </label>
           <label><span>Censor fraction</span>
             <input name="censor_fraction" type="number" min="0" max="1" step="any" required>
+            <small>init share censoring sequencers</small>
           </label>
           <label><span>Committee size</span>
             <input name="committee_size" type="number" min="1" step="1" required>
+            <small>sequencers per committee</small>
           </label>
           <label><span>Slot seconds</span>
             <input name="slot_seconds" type="number" min="1" step="1" required>
+            <small>smallest 'block' unit proposable</small>
           </label>
           <label><span>Max horizon days</span>
             <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
+            <small>max simulation window</small>
           </label>
           <label><span>Epoch slots</span>
             <input name="epoch_slots" type="number" min="1" step="1" required>
+            <small>committee reign period</small>
           </label>
           <label><span>Max new sequencers / epoch</span>
             <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
+            <small>entry churn rate</small>
           </label>
           <label><span>Honest add success rate</span>
             <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>
+            <small>honest share of sequencer adds</small>
           </label>
           <label><span>Probability near-one margin</span>
             <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
+            <small>near-100% cutoff</small>
           </label>
         </form>
         <div class="actions">
-          <button id="run-btn" type="button">Run Simulation</button>
-          <button id="reset-btn" type="button">Reset Defaults</button>
-          <button id="csv-btn" type="button">Download CSV</button>
+          <button id="run-btn" type="button">Run</button>
+          <button id="reset-btn" type="button">Reset</button>
+          <button id="csv-btn" type="button">dl CSV</button>
         </div>
         <p id="status" class="status">Ready.</p>
         <p id="summary" class="summary"></p>
