@@ -13,51 +13,70 @@
       <p>Defaults replicate current Aztec mainnet config. Adjust config and recompute.</p>
     </header>
 
-    <section class="panel">
-      <h2>Config</h2>
-      <form id="config-form" class="grid">
-        <label>base_sequencers
-          <input name="base_sequencers" type="number" min="0" step="1" required>
-        </label>
-        <label>stake_per_sequencer_token
-          <input name="stake_per_sequencer_token" type="number" min="1" step="1" required>
-        </label>
-        <label>token_usd
-          <input name="token_usd" type="number" min="0.0000001" step="any" required>
-        </label>
-        <label>censor_fraction
-          <input name="censor_fraction" type="number" min="0" max="1" step="any" required>
-        </label>
-        <label>committee_size
-          <input name="committee_size" type="number" min="1" step="1" required>
-        </label>
-        <label>slot_seconds
-          <input name="slot_seconds" type="number" min="1" step="1" required>
-        </label>
-        <label>max_horizon_days
-          <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
-        </label>
-        <label>epoch_slots
-          <input name="epoch_slots" type="number" min="1" step="1" required>
-        </label>
-        <label>max_new_sequencers_per_epoch
-          <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
-        </label>
-        <label>honest_add_success_rate
-          <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>
-        </label>
-        <label>probability_near_one_margin
-          <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
-        </label>
-      </form>
-      <div class="actions">
-        <button id="run-btn" type="button">Run Simulation</button>
-        <button id="reset-btn" type="button">Reset Defaults</button>
-        <button id="csv-btn" type="button">Download CSV</button>
-      </div>
-      <p id="status" class="status">Ready.</p>
-      <p id="summary" class="summary"></p>
+    <section class="t90-strip" aria-live="polite">
+      <article class="t90-card t90-card-non">
+        <p class="t90-label">Non-committee T90</p>
+        <p id="t90-non-value" class="t90-value">-</p>
+      </article>
+      <article class="t90-card t90-card-committee">
+        <p class="t90-label">Committee T90</p>
+        <p id="t90-committee-value" class="t90-value">-</p>
+      </article>
     </section>
+    <p class="t90-help">
+      time until cumulative inclusion probability reaches 90% for a submitted transaction in the committee or non-committee scenario with the current configuration.
+    </p>
+
+    <details class="panel config-panel">
+      <summary>
+        <span class="config-title">Config</span>
+        <span class="config-hint">show/hide</span>
+      </summary>
+      <div class="config-body">
+        <form id="config-form" class="grid config-grid">
+          <label><span>Base sequencers</span>
+            <input name="base_sequencers" type="number" min="0" step="1" required>
+          </label>
+          <label><span>Stake / sequencer (token)</span>
+            <input name="stake_per_sequencer_token" type="number" min="1" step="1" required>
+          </label>
+          <label><span>Token USD</span>
+            <input name="token_usd" type="number" min="0.0000001" step="any" required>
+          </label>
+          <label><span>Censor fraction</span>
+            <input name="censor_fraction" type="number" min="0" max="1" step="any" required>
+          </label>
+          <label><span>Committee size</span>
+            <input name="committee_size" type="number" min="1" step="1" required>
+          </label>
+          <label><span>Slot seconds</span>
+            <input name="slot_seconds" type="number" min="1" step="1" required>
+          </label>
+          <label><span>Max horizon days</span>
+            <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
+          </label>
+          <label><span>Epoch slots</span>
+            <input name="epoch_slots" type="number" min="1" step="1" required>
+          </label>
+          <label><span>Max new sequencers / epoch</span>
+            <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
+          </label>
+          <label><span>Honest add success rate</span>
+            <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>
+          </label>
+          <label><span>Probability near-one margin</span>
+            <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
+          </label>
+        </form>
+        <div class="actions">
+          <button id="run-btn" type="button">Run Simulation</button>
+          <button id="reset-btn" type="button">Reset Defaults</button>
+          <button id="csv-btn" type="button">Download CSV</button>
+        </div>
+        <p id="status" class="status">Ready.</p>
+        <p id="summary" class="summary"></p>
+      </div>
+    </details>
 
     <section class="panel">
       <h2>Cumulative Inclusion Over Time</h2>
