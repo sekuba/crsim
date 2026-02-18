@@ -154,6 +154,9 @@ function validateConfig(cfg) {
   if (cfg.committee_size <= 0) {
     errors.push("committee_size must be > 0");
   }
+  if (cfg.committee_size > cfg.base_sequencers) {
+    errors.push("committee_size must be <= base_sequencers at simulation start");
+  }
   if (cfg.slot_seconds <= 0) {
     errors.push("slot_seconds must be > 0");
   }
@@ -231,21 +234,58 @@ class SimulationModel {
       return [];
     }
 
-    let p = Math.exp(
-      logChoose(censorSeq, lo)
-      + logChoose(honestSeq, committeeSize - lo)
-      - logChoose(totalSeq, committeeSize)
-    );
+    // Build probabilities relative to the mode to avoid underflow for large committees.
+    const span = hi - lo + 1;
+    const weights = new Array(span).fill(0.0);
+    const modeRaw = Math.floor(((committeeSize + 1) * (censorSeq + 1)) / (totalSeq + 2));
+    const mode = Math.min(hi, Math.max(lo, modeRaw));
+    weights[mode - lo] = 1.0;
 
+    for (let c = mode + 1; c <= hi; c += 1) {
+      const prev = c - 1;
+      const numer = (censorSeq - prev) * (committeeSize - prev);
+      const denom = c * (honestSeq - committeeSize + c);
+      weights[c - lo] = denom <= 0 ? 0.0 : weights[prev - lo] * (numer / denom);
+    }
+
+    for (let c = mode - 1; c >= lo; c -= 1) {
+      const numer = (c + 1) * (honestSeq - committeeSize + c + 1);
+      const denom = (censorSeq - c) * (committeeSize - c);
+      weights[c - lo] = denom <= 0 ? 0.0 : weights[c + 1 - lo] * (numer / denom);
+    }
+
+    let sum = 0.0;
+    for (const w of weights) {
+      sum += w;
+    }
+
+    if (!Number.isFinite(sum) || sum <= EPSILON) {
+      const logWeights = [];
+      let maxLog = Number.NEGATIVE_INFINITY;
+      for (let c = lo; c <= hi; c += 1) {
+        const logP = logChoose(censorSeq, c)
+          + logChoose(honestSeq, committeeSize - c)
+          - logChoose(totalSeq, committeeSize);
+        logWeights.push(logP);
+        if (logP > maxLog) {
+          maxLog = logP;
+        }
+      }
+      sum = 0.0;
+      for (let i = 0; i < logWeights.length; i += 1) {
+        const scaled = Math.exp(logWeights[i] - maxLog);
+        weights[i] = scaled;
+        sum += scaled;
+      }
+      if (!Number.isFinite(sum) || sum <= EPSILON) {
+        return [];
+      }
+    }
+
+    const invSum = 1.0 / sum;
     const dist = [];
     for (let c = lo; c <= hi; c += 1) {
-      dist.push([c, p]);
-      if (c === hi) {
-        break;
-      }
-      const numer = (censorSeq - c) * (committeeSize - c);
-      const denom = (c + 1) * (honestSeq - committeeSize + c + 1);
-      p *= numer / denom;
+      dist.push([c, weights[c - lo] * invSum]);
     }
     return dist;
   }
@@ -455,8 +495,8 @@ function buildTimeSeries(cfg, model) {
     }
 
     elapsedSlots += slotsInEpoch;
-    const completedEpochs = Math.floor(elapsedSlots / cfg.epoch_slots);
-    const currentUserSeq = completedEpochs * cfg.max_new_sequencers_per_epoch;
+    // Value at this time point reflects the sequencers active during the slots just simulated.
+    const currentUserSeq = activeUser;
     days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
     invested.push(currentUserSeq * usdPerSeq);
     userSeq.push(currentUserSeq);
@@ -678,6 +718,14 @@ function daysToReachUserSeq(userSeq, slotSeconds, epochSlots, maxNewPerEpoch) {
   return (epochs * epochSlots * slotSeconds) / (24 * 3600);
 }
 
+function activeUserFromElapsedSlots(slots, epochSlots, maxNewPerEpoch) {
+  if (slots <= 0) {
+    return 0;
+  }
+  const epochIdx = Math.floor((slots - 1) / epochSlots);
+  return Math.max(0, epochIdx * maxNewPerEpoch);
+}
+
 function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNewPerEpoch, usdPerSeq) {
   const values = [];
   const labels = [];
@@ -686,8 +734,7 @@ function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNew
     values.push(dayValue);
 
     const slots = Math.floor((dayValue * 24 * 3600) / slotSeconds);
-    const epochs = Math.max(0, Math.floor(slots / epochSlots));
-    const seq = epochs * maxNewPerEpoch;
+    const seq = activeUserFromElapsedSlots(slots, epochSlots, maxNewPerEpoch);
     const usd = seq * usdPerSeq;
     labels.push(`${formatDayTickLabel(dayValue)}d | $${Math.round(usd).toLocaleString()} [${seq}]`);
   }

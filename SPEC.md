@@ -29,6 +29,9 @@ as user-operated sequencers are added over time.
 - `honest_add_success_rate`
 - `probability_near_one_margin`
 
+Validation:
+- `committee_size` must be `<= base_sequencers` at simulation start.
+
 ## Outputs
 - Cumulative inclusion chart over elapsed days: stops early once both modes reach `1 - probability_near_one_margin`, else uses full horizon.
 - Effective per-slot inclusion chart: uses full `max_horizon_days`.
@@ -45,3 +48,4 @@ as user-operated sequencers are added over time.
 ## Run
 - Open `web/index.html` directly, or serve the `web/` directory with any static server.
 - Plotly is loaded from CDN (`cdn.plot.ly`), so network access is required for charts.
+- Run statistical/regression checks with `node scripts/test-sim.js`.
