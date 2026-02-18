@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CR SIM</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -14,17 +15,19 @@
     </header>
 
     <section class="t90-strip" aria-live="polite">
-      <article class="t90-card t90-card-non">
-        <p class="t90-label">Non-committee T90</p>
-        <p id="t90-non-value" class="t90-value">-</p>
-      </article>
       <article class="t90-card t90-card-committee">
         <p class="t90-label">Committee T90</p>
         <p id="t90-committee-value" class="t90-value">-</p>
+        <p id="t90-committee-cost" class="t90-meta">stake @T90: -</p>
+      </article>
+      <article class="t90-card t90-card-non">
+        <p class="t90-label">Non-committee T90</p>
+        <p id="t90-non-value" class="t90-value">-</p>
+        <p id="t90-non-cost" class="t90-meta">stake @T90: -</p>
       </article>
     </section>
     <p class="t90-help">
-      time until cumulative inclusion probability reaches 90% for a submitted transaction in the committee or non-committee scenario with the current configuration.
+      time until cumulative inclusion probability reaches 90% for a submitted transaction in the committee or non-committee scenario with the current configuration. check the config for scenario details.
     </p>
 
     <details class="panel config-panel">

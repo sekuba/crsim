@@ -37,6 +37,8 @@ const resetBtn = document.getElementById("reset-btn");
 const csvBtn = document.getElementById("csv-btn");
 const t90CommitteeValueEl = document.getElementById("t90-committee-value");
 const t90NonValueEl = document.getElementById("t90-non-value");
+const t90CommitteeCostEl = document.getElementById("t90-committee-cost");
+const t90NonCostEl = document.getElementById("t90-non-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
@@ -53,6 +55,20 @@ function t90CardText(days, maxHorizonDays) {
     return `>${maxHorizonDays.toFixed(2)}d`;
   }
   return `${days.toFixed(2)}d`;
+}
+
+function formatWholeNumber(value) {
+  return Math.round(value).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
+function t90CostText(usd, token) {
+  if (usd === null || token === null) {
+    return "Cost @T90: n/a";
+  }
+  return `Cost @T90: $${formatWholeNumber(usd)} | ${formatWholeNumber(token)} tok`;
 }
 
 function clampProbability(value) {
@@ -464,14 +480,42 @@ function buildTimeSeries(cfg, model) {
   };
 }
 
-function firstDayAtProbability(days, probabilities, threshold) {
-  const count = Math.min(days.length, probabilities.length);
-  for (let i = 0; i < count; i += 1) {
+function firstIndexAtProbability(probabilities, threshold) {
+  for (let i = 0; i < probabilities.length; i += 1) {
     if (probabilities[i] >= threshold) {
-      return days[i];
+      return i;
     }
   }
   return null;
+}
+
+function firstDayAtProbability(days, probabilities, threshold) {
+  const idx = firstIndexAtProbability(probabilities, threshold);
+  if (idx === null || idx >= days.length) {
+    return null;
+  }
+  return days[idx];
+}
+
+function valueAtIndexOrNull(values, idx) {
+  if (idx === null || idx < 0 || idx >= values.length) {
+    return null;
+  }
+  return values[idx];
+}
+
+function t90TokenCost(cfg, honestSeqCount) {
+  if (honestSeqCount === null) {
+    return null;
+  }
+  return honestSeqCount * cfg.stake_per_sequencer_token;
+}
+
+function t90UsdCost(cfg, tokenCost) {
+  if (tokenCost === null) {
+    return null;
+  }
+  return tokenCost * cfg.token_usd;
 }
 
 function runSimulation(cfg) {
@@ -536,8 +580,16 @@ function runSimulation(cfg) {
 
   const timeSeries = buildTimeSeries(cfg, model);
   const t90Target = 0.9;
+  const t90CommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, t90Target);
+  const t90NonCommitteeIdx = firstIndexAtProbability(timeSeries.nonProbs, t90Target);
   const t90CommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, t90Target);
   const t90NonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, t90Target);
+  const t90CommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90CommitteeIdx);
+  const t90NonCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90NonCommitteeIdx);
+  const t90CommitteeStakeToken = t90TokenCost(cfg, t90CommitteeHonestSeq);
+  const t90NonCommitteeStakeToken = t90TokenCost(cfg, t90NonCommitteeHonestSeq);
+  const t90CommitteeStakeUsd = t90UsdCost(cfg, t90CommitteeStakeToken);
+  const t90NonCommitteeStakeUsd = t90UsdCost(cfg, t90NonCommitteeStakeToken);
   const targetProbability = 1.0 - cfg.probability_near_one_margin;
   let cumulativeEndIdx = timeSeries.days.length - 1;
   let cumulativeReachedTarget = false;
@@ -573,6 +625,10 @@ function runSimulation(cfg) {
       t90TargetProbability: t90Target,
       t90CommitteeDays,
       t90NonCommitteeDays,
+      t90CommitteeStakeToken,
+      t90NonCommitteeStakeToken,
+      t90CommitteeStakeUsd,
+      t90NonCommitteeStakeUsd,
     },
     series: {
       invested,
@@ -963,6 +1019,8 @@ function runFromForm() {
 
     t90CommitteeValueEl.textContent = t90CardText(output.meta.t90CommitteeDays, cfg.max_horizon_days);
     t90NonValueEl.textContent = t90CardText(output.meta.t90NonCommitteeDays, cfg.max_horizon_days);
+    t90CommitteeCostEl.textContent = t90CostText(output.meta.t90CommitteeStakeUsd, output.meta.t90CommitteeStakeToken);
+    t90NonCostEl.textContent = t90CostText(output.meta.t90NonCommitteeStakeUsd, output.meta.t90NonCommitteeStakeToken);
 
     const t90Label = `T${Math.round(output.meta.t90TargetProbability * 100)}`;
     const formatT90 = (days) => {
@@ -982,6 +1040,8 @@ function runFromForm() {
   } catch (error) {
     t90CommitteeValueEl.textContent = "-";
     t90NonValueEl.textContent = "-";
+    t90CommitteeCostEl.textContent = "Cost @T90: -";
+    t90NonCostEl.textContent = "Cost @T90: -";
     setStatus(`Error: ${error.message}`, true);
   }
 }
