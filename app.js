@@ -603,9 +603,8 @@ function plotConfig() {
   };
 }
 
-function baseLayout(title, xLabel, yLabel, xRange, yRange, xTicks) {
+function baseLayout(xLabel, yLabel, xRange, yRange, xTicks) {
   return {
-    title,
     margin: { l: 70, r: 30, t: 50, b: 60 },
     paper_bgcolor: "#ffffff",
     plot_bgcolor: "#ffffff",
@@ -648,7 +647,6 @@ function renderCharts(output) {
     return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
   });
   const cumulativeLayout = baseLayout(
-    "Cumulative Inclusion Probability Over Time",
     "Elapsed days | invested stake in USD [user sequencers]",
     "Cumulative inclusion probability",
     [Math.min(...cumulativeDays), Math.max(...cumulativeDays)],
@@ -679,7 +677,6 @@ function renderCharts(output) {
   ];
 
   const perSlotLayout = baseLayout(
-    `Effective Per-slot Inclusion Over Time (${output.meta.horizonTag})`,
     "Elapsed days | invested stake in USD [user sequencers]",
     "Effective per-slot inclusion probability",
     [Math.min(...output.series.perSlotDays), Math.max(...output.series.perSlotDays)],
@@ -746,7 +743,6 @@ function renderCharts(output) {
   });
 
   const delayLayout = baseLayout(
-    `Expected Inclusion Delay vs Invested Stake (${output.meta.horizonTag})`,
     "Invested stake in USD [user sequencers]",
     "Expected time to inclusion (hours)",
     [output.meta.delayXMin, output.meta.delayXMax],
@@ -832,6 +828,41 @@ function setFormValues(values) {
   }
 }
 
+function configFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const cfg = { ...DEFAULT_CONFIG };
+  let hasConfigParam = false;
+
+  for (const key of Object.keys(DEFAULT_CONFIG)) {
+    if (!params.has(key)) {
+      continue;
+    }
+    const parsed = Number(params.get(key));
+    if (!Number.isFinite(parsed)) {
+      continue;
+    }
+    cfg[key] = INTEGER_FIELDS.has(key) ? Math.floor(parsed) : parsed;
+    hasConfigParam = true;
+  }
+
+  return hasConfigParam ? cfg : null;
+}
+
+function configToUrl(cfg) {
+  const params = new URLSearchParams(window.location.search);
+
+  for (const [key, defaultValue] of Object.entries(DEFAULT_CONFIG)) {
+    params.delete(key);
+    if (cfg[key] !== defaultValue) {
+      params.set(key, String(cfg[key]));
+    }
+  }
+
+  const query = params.toString();
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  window.history.replaceState({}, "", nextUrl);
+}
+
 function downloadTextFile(filename, content) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -854,6 +885,8 @@ function runFromForm() {
     if (errors.length) {
       throw new Error(errors.join(" | "));
     }
+
+    configToUrl(cfg);
 
     const output = runSimulation(cfg);
     latestCsv = rowsToCsv(output.rows);
@@ -885,5 +918,11 @@ csvBtn.addEventListener("click", () => {
     downloadTextFile("cr_simulation.csv", latestCsv);
   }
 });
-setFormValues(DEFAULT_CONFIG);
+
+const initialConfig = configFromUrl();
+if (initialConfig && validateConfig(initialConfig).length === 0) {
+  setFormValues(initialConfig);
+} else {
+  setFormValues(DEFAULT_CONFIG);
+}
 runFromForm();
