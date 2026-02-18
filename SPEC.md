@@ -37,6 +37,7 @@ as user-operated sequencers are added over time.
 - `Run Simulation`: validate inputs, recompute data, rerender charts.
 - `Reset Defaults`: restore defaults from `DEFAULT_CONFIG` and rerun.
 - `Download CSV`: export current in-memory results.
+- URL sync: on successful run, current non-default config values are written to query params; valid query params are loaded on page open.
 
 ## Run
 - Open `web/index.html` directly, or serve the `web/` directory with any static server.
