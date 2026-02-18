@@ -35,6 +35,8 @@ const summaryEl = document.getElementById("summary");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
 const csvBtn = document.getElementById("csv-btn");
+const t90CommitteeValueEl = document.getElementById("t90-committee-value");
+const t90NonValueEl = document.getElementById("t90-non-value");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
@@ -44,6 +46,13 @@ let latestCsv = "";
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.style.color = isError ? "#b42318" : "#334155";
+}
+
+function t90CardText(days, maxHorizonDays) {
+  if (days === null) {
+    return `>${maxHorizonDays.toFixed(2)}d`;
+  }
+  return `${days.toFixed(2)}d`;
 }
 
 function clampProbability(value) {
@@ -952,6 +961,9 @@ function runFromForm() {
 
     renderCharts(output);
 
+    t90CommitteeValueEl.textContent = t90CardText(output.meta.t90CommitteeDays, cfg.max_horizon_days);
+    t90NonValueEl.textContent = t90CardText(output.meta.t90NonCommitteeDays, cfg.max_horizon_days);
+
     const t90Label = `T${Math.round(output.meta.t90TargetProbability * 100)}`;
     const formatT90 = (days) => {
       if (days === null) {
@@ -968,6 +980,8 @@ function runFromForm() {
     summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Stake samples: ${output.meta.userPointCount.toLocaleString()} | ${t90Summary} | ${cumulativeSummary} | ${assumptionsSummary}`;
     setStatus("Simulation complete.");
   } catch (error) {
+    t90CommitteeValueEl.textContent = "-";
+    t90NonValueEl.textContent = "-";
     setStatus(`Error: ${error.message}`, true);
   }
 }

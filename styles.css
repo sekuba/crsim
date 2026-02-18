@@ -25,6 +25,49 @@ header p {
   color: #4a5562;
 }
 
+.t90-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.t90-card {
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+}
+
+.t90-card-non {
+  background: linear-gradient(135deg, #fb923c, #ea580c);
+}
+
+.t90-card-committee {
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+}
+
+.t90-label {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.92;
+}
+
+.t90-value {
+  margin: 0;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.t90-help {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: #4b5563;
+}
+
 .panel {
   background: #fff;
   border: 1px solid #dfe4ea;
@@ -37,6 +80,46 @@ header p {
 .panel h2 {
   margin: 0 0 12px;
   font-size: 20px;
+}
+
+.config-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.config-panel summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+
+.config-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-panel[open] summary {
+  border-bottom-color: #dfe4ea;
+}
+
+.config-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.config-hint {
+  font-size: 12px;
+  color: #6b7785;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.config-body {
+  padding: 12px 14px 14px;
 }
 
 .grid {
@@ -59,6 +142,25 @@ input {
   border: 1px solid #cfd8e3;
   border-radius: 8px;
   font-size: 14px;
+}
+
+.config-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.config-grid label {
+  font-size: 12px;
+  gap: 4px;
+}
+
+.config-grid label > span {
+  color: #3f4955;
+}
+
+.config-grid input {
+  padding: 6px 8px;
+  font-size: 13px;
 }
 
 .actions {
@@ -113,4 +215,42 @@ button:hover {
   margin: 8px 0 0;
   font-size: 12px;
   color: #667382;
+}
+
+@media (max-width: 860px) {
+  .t90-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .t90-value {
+    font-size: 21px;
+  }
+
+  .config-body {
+    padding: 10px 10px 12px;
+  }
+
+  .config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .config-grid label {
+    font-size: 11px;
+  }
+
+  .config-grid input {
+    padding: 6px 7px;
+    font-size: 12px;
+  }
+
+  .chart-wrap {
+    min-height: 420px;
+  }
+
+  .chart-wrap .plotly,
+  .chart-wrap .js-plotly-plot,
+  .chart-wrap .plot-container {
+    height: 420px !important;
+  }
 }
