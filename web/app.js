@@ -5,16 +5,18 @@ const DELAY_Y_CAP_HOURS = 30 * 24;
 const COMMITTEE_COLOR = "#2563EB";
 const NON_COMMITTEE_COLOR = "#F97316";
 
+// modeled after current aztec mainnet
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
   token_usd: 0.02,
-  censor_fraction: 1.0,
+  censor_fraction: 0.67,
   committee_size: 24,
   slot_seconds: 72,
   max_horizon_days: 30,
   epoch_slots: 32,
   max_new_sequencers_per_epoch: 4,
+  honest_add_success_rate: 0.5,
   probability_near_one_margin: 0.001,
 };
 
@@ -139,6 +141,9 @@ function validateConfig(cfg) {
   if (cfg.max_new_sequencers_per_epoch <= 0) {
     errors.push("max_new_sequencers_per_epoch must be > 0");
   }
+  if (cfg.honest_add_success_rate <= 0 || cfg.honest_add_success_rate > 1) {
+    errors.push("honest_add_success_rate must be in (0, 1]");
+  }
   if (cfg.probability_near_one_margin <= 0 || cfg.probability_near_one_margin >= 1) {
     errors.push("probability_near_one_margin must be in (0, 1)");
   }
@@ -182,19 +187,18 @@ class SimulationModel {
     this.cache = new Map();
   }
 
-  pNonCommitteeSlot(userSeq) {
-    const totalSeq = this.cfg.base_sequencers + userSeq;
+  pNonCommitteeSlot(userSeq, maliciousSeq = 0) {
+    const totalSeq = this.cfg.base_sequencers + userSeq + maliciousSeq;
     if (totalSeq <= 0) {
       return 0;
     }
     return clampProbability((userSeq + this.initialHonest) / totalSeq);
   }
 
-  committeeDistribution(totalSeq, committeeSize) {
+  committeeDistribution(totalSeq, censorSeq, committeeSize) {
     if (committeeSize > totalSeq) {
       return [];
     }
-    const censorSeq = this.initialCensors;
     const honestSeq = totalSeq - censorSeq;
     const lo = Math.max(0, committeeSize - honestSeq);
     const hi = Math.min(committeeSize, censorSeq);
@@ -221,14 +225,15 @@ class SimulationModel {
     return dist;
   }
 
-  committeeEpochFactors(userSeq, slotsInEpoch, committeeSize = null) {
+  committeeEpochFactors(userSeq, maliciousSeq, slotsInEpoch, committeeSize = null) {
     const k = committeeSize === null ? this.cfg.committee_size : committeeSize;
-    const key = `${userSeq}|${slotsInEpoch}|${k}`;
+    const key = `${userSeq}|${maliciousSeq}|${slotsInEpoch}|${k}`;
     if (this.cache.has(key)) {
       return this.cache.get(key);
     }
 
-    const totalSeq = this.cfg.base_sequencers + userSeq;
+    const totalSeq = this.cfg.base_sequencers + userSeq + maliciousSeq;
+    const censorSeq = this.initialCensors + maliciousSeq;
     if (k > totalSeq) {
       const fallback = [1.0, slotsInEpoch, 0.0];
       this.cache.set(key, fallback);
@@ -241,7 +246,7 @@ class SimulationModel {
     let gTotal = 0.0;
     let mass = 0.0;
 
-    for (const [censorCommittee, p] of this.committeeDistribution(totalSeq, k)) {
+    for (const [censorCommittee, p] of this.committeeDistribution(totalSeq, censorSeq, k)) {
       mass += p;
       const miss = censorCommittee / k;
       let f = 1.0;
@@ -272,18 +277,29 @@ class SimulationModel {
   }
 }
 
-function epochFactors(model, activeUser, slotsInEpoch, committeeMode, committeeSize = null) {
+function epochFactors(model, activeUser, activeMalicious, slotsInEpoch, committeeMode, committeeSize = null) {
   if (committeeMode) {
-    const [f, g] = model.committeeEpochFactors(activeUser, slotsInEpoch, committeeSize);
+    const [f, g] = model.committeeEpochFactors(activeUser, activeMalicious, slotsInEpoch, committeeSize);
     return [f, g];
   }
-  const pNon = model.pNonCommitteeSlot(activeUser);
+  const pNon = model.pNonCommitteeSlot(activeUser, activeMalicious);
   const miss = 1.0 - pNon;
   return [miss ** slotsInEpoch, geometricSum(miss, slotsInEpoch)];
 }
 
 function activeUserForEpoch(cfg, targetUserSeq, epochIdx) {
   return Math.min(targetUserSeq, epochIdx * cfg.max_new_sequencers_per_epoch);
+}
+
+function maliciousSequencersForHonest(cfg, honestUserSeq) {
+  if (honestUserSeq <= 0) {
+    return 0;
+  }
+  const h = cfg.honest_add_success_rate;
+  if (h >= 1.0 - EPSILON) {
+    return 0;
+  }
+  return Math.max(0, Math.round((honestUserSeq * (1.0 - h)) / h));
 }
 
 function horizonLogSurvival(cfg, model, targetUserSeq, committeeMode, slots, committeeSize = null) {
@@ -296,7 +312,15 @@ function horizonLogSurvival(cfg, model, targetUserSeq, committeeMode, slots, com
     const startSlot = epochIdx * cfg.epoch_slots;
     const slotsInEpoch = Math.min(cfg.epoch_slots, slots - startSlot);
     const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx);
-    const [f] = epochFactors(model, activeUser, slotsInEpoch, committeeMode, committeeSize);
+    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
+    const [f] = epochFactors(
+      model,
+      activeUser,
+      activeMalicious,
+      slotsInEpoch,
+      committeeMode,
+      committeeSize
+    );
     if (f <= 0) {
       return Number.NEGATIVE_INFINITY;
     }
@@ -337,12 +361,28 @@ function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, c
 
   for (let epochIdx = 0; epochIdx < epochsToFull; epochIdx += 1) {
     const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx);
-    const [f, g] = epochFactors(model, activeUser, cfg.epoch_slots, committeeMode, committeeSize);
+    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
+    const [f, g] = epochFactors(
+      model,
+      activeUser,
+      activeMalicious,
+      cfg.epoch_slots,
+      committeeMode,
+      committeeSize
+    );
     expectedSlots += survival * g;
     survival *= f;
   }
 
-  const [fFinal, gFinal] = epochFactors(model, targetUserSeq, cfg.epoch_slots, committeeMode, committeeSize);
+  const finalMalicious = maliciousSequencersForHonest(cfg, targetUserSeq);
+  const [fFinal, gFinal] = epochFactors(
+    model,
+    targetUserSeq,
+    finalMalicious,
+    cfg.epoch_slots,
+    committeeMode,
+    committeeSize
+  );
   if (fFinal >= 1.0 - EPSILON) {
     return Number.POSITIVE_INFINITY;
   }
@@ -373,8 +413,9 @@ function buildTimeSeries(cfg, model) {
       break;
     }
     const activeUser = epochIdx * cfg.max_new_sequencers_per_epoch;
-    const [fNon] = epochFactors(model, activeUser, slotsInEpoch, false);
-    const [fCom] = epochFactors(model, activeUser, slotsInEpoch, true);
+    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
+    const [fNon] = epochFactors(model, activeUser, activeMalicious, slotsInEpoch, false);
+    const [fCom] = epochFactors(model, activeUser, activeMalicious, slotsInEpoch, true);
 
     if (fNon <= 0.0) {
       logSurvivalNon = Number.NEGATIVE_INFINITY;
@@ -414,6 +455,16 @@ function buildTimeSeries(cfg, model) {
   };
 }
 
+function firstDayAtProbability(days, probabilities, threshold) {
+  const count = Math.min(days.length, probabilities.length);
+  for (let i = 0; i < count; i += 1) {
+    if (probabilities[i] >= threshold) {
+      return days[i];
+    }
+  }
+  return null;
+}
+
 function runSimulation(cfg) {
   const slots = maxHorizonSlots(cfg);
   const usdPerSeq = cfg.stake_per_sequencer_token * cfg.token_usd;
@@ -428,15 +479,17 @@ function runSimulation(cfg) {
 
   // Keep row sampling on the full max-horizon range; cumulative charts may stop earlier.
   for (const userSeq of maxHorizonUserSeqValues(cfg)) {
+    const maliciousSeq = maliciousSequencersForHonest(cfg, userSeq);
     const investedToken = userSeq * cfg.stake_per_sequencer_token;
     const investedUsd = investedToken * cfg.token_usd;
-    const [, , pAllow] = model.committeeEpochFactors(userSeq, cfg.epoch_slots);
+    const [, , pAllow] = model.committeeEpochFactors(userSeq, maliciousSeq, cfg.epoch_slots);
 
     const logSurvivalNon = horizonLogSurvival(cfg, model, userSeq, false, slots);
     const logSurvivalCom = horizonLogSurvival(cfg, model, userSeq, true, slots);
 
     rows.push({
       user_sequencers: userSeq,
+      malicious_sequencers: maliciousSeq,
       invested_stake_token: investedToken,
       invested_stake_usd: investedUsd,
       p_committee_allows_honest: pAllow,
@@ -473,6 +526,9 @@ function runSimulation(cfg) {
   }
 
   const timeSeries = buildTimeSeries(cfg, model);
+  const t90Target = 0.9;
+  const t90CommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, t90Target);
+  const t90NonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, t90Target);
   const targetProbability = 1.0 - cfg.probability_near_one_margin;
   let cumulativeEndIdx = timeSeries.days.length - 1;
   let cumulativeReachedTarget = false;
@@ -505,6 +561,9 @@ function runSimulation(cfg) {
       cumulativeXMaxDays: timeSeries.days[cumulativeEndIdx],
       cumulativeEndNonProb: timeSeries.nonProbs[cumulativeEndIdx],
       cumulativeEndComProb: timeSeries.comProbs[cumulativeEndIdx],
+      t90TargetProbability: t90Target,
+      t90CommitteeDays,
+      t90NonCommitteeDays,
     },
     series: {
       invested,
@@ -893,12 +952,20 @@ function runFromForm() {
 
     renderCharts(output);
 
+    const t90Label = `T${Math.round(output.meta.t90TargetProbability * 100)}`;
+    const formatT90 = (days) => {
+      if (days === null) {
+        return `not reached by ${cfg.max_horizon_days.toFixed(2)} days`;
+      }
+      return `${days.toFixed(2)} days`;
+    };
+    const t90Summary = `${t90Label}: committee ${formatT90(output.meta.t90CommitteeDays)}, non-committee ${formatT90(output.meta.t90NonCommitteeDays)}`;
     const cumulativeTargetPct = (output.meta.cumulativeTargetProbability * 100).toFixed(3);
     const cumulativeSummary = output.meta.cumulativeReachedTarget
       ? `Cumulative >= ${cumulativeTargetPct}% by ${output.meta.cumulativeXMaxDays.toFixed(2)} days`
       : `Cumulative at ${output.meta.cumulativeXMaxDays.toFixed(2)} days: committee ${(output.meta.cumulativeEndComProb * 100).toFixed(3)}%, non-committee ${(output.meta.cumulativeEndNonProb * 100).toFixed(3)}%`;
-    const assumptionsSummary = "Assumptions: all added sequencers are user sequencers; onboarding updates at epoch boundaries; initial censor share is fixed.";
-    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Stake samples: ${output.meta.userPointCount.toLocaleString()} | ${cumulativeSummary} | ${assumptionsSummary}`;
+    const assumptionsSummary = "Assumptions: onboarding updates at epoch boundaries; initial censor share is fixed from genesis; malicious additions are derived from honest_add_success_rate.";
+    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Stake samples: ${output.meta.userPointCount.toLocaleString()} | ${t90Summary} | ${cumulativeSummary} | ${assumptionsSummary}`;
     setStatus("Simulation complete.");
   } catch (error) {
     setStatus(`Error: ${error.message}`, true);
