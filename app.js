@@ -10,7 +10,7 @@ const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
   token_usd: 0.02,
-  censor_fraction: 0.67,
+  censor_fraction: 0.5,
   committee_size: 48,
   slot_seconds: 72,
   max_horizon_days: 30,
@@ -166,8 +166,8 @@ function validateConfig(cfg) {
   if (cfg.validator_set_lag_epochs < 0) {
     errors.push("validator_set_lag_epochs must be >= 0");
   }
-  if (cfg.max_new_sequencers_per_epoch <= 0) {
-    errors.push("max_new_sequencers_per_epoch must be > 0");
+  if (cfg.max_new_sequencers_per_epoch < 0) {
+    errors.push("max_new_sequencers_per_epoch must be >= 0");
   }
   if (cfg.honest_add_success_rate <= 0 || cfg.honest_add_success_rate > 1) {
     errors.push("honest_add_success_rate must be in (0, 1]");
@@ -363,6 +363,9 @@ function epochsToSteadyState(cfg, targetUserSeq, lagEpochs = 0) {
   if (targetUserSeq <= 0) {
     return 0;
   }
+  if (cfg.max_new_sequencers_per_epoch <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
   return Math.ceil(targetUserSeq / cfg.max_new_sequencers_per_epoch) + lagEpochs;
 }
 
@@ -433,6 +436,9 @@ function effectivePerSlotFromLogSurvival(logSurvival, slots) {
 function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, committeeSize = null) {
   const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
   const epochsToFull = epochsToSteadyState(cfg, targetUserSeq, lagEpochs);
+  if (!Number.isFinite(epochsToFull)) {
+    return Number.POSITIVE_INFINITY;
+  }
   let survival = 1.0;
   let expectedSlots = 0.0;
 
@@ -694,6 +700,9 @@ function formatDayTickLabel(days) {
 function daysToReachUserSeq(userSeq, slotSeconds, epochSlots, maxNewPerEpoch) {
   if (userSeq <= 0) {
     return 0.0;
+  }
+  if (maxNewPerEpoch <= 0) {
+    return Number.POSITIVE_INFINITY;
   }
   const epochs = Math.ceil(userSeq / maxNewPerEpoch);
   return (epochs * epochSlots * slotSeconds) / (24 * 3600);
