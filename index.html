@@ -11,7 +11,7 @@
   <main class="page">
     <header>
       <h1>CR sim for decentralized sequencers</h1>
-      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction. Config defaults simulate Aztec mainnet 'Alpha' values.</p>
+      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction. Config defaults simulate Aztec Alpha values, including the escape hatch fallback.</p>
     </header>
 
     <section class="t90-strip" aria-live="polite">
@@ -20,6 +20,11 @@
         <p id="t90-committee-value" class="t90-value">-</p>
         <p id="t90-committee-cost" class="t90-meta">stake @T90: -</p>
       </article>
+      <article class="t90-card t90-card-committee-eh">
+        <p class="t90-label">Committee + EH T90</p>
+        <p id="t90-committee-eh-value" class="t90-value">-</p>
+        <p id="t90-committee-eh-cost" class="t90-meta">stake @T90: -</p>
+      </article>
       <article class="t90-card t90-card-non">
         <p class="t90-label">Non-committee T90</p>
         <p id="t90-non-value" class="t90-value">-</p>
@@ -27,8 +32,9 @@
       </article>
     </section>
     <p class="t90-help">
-      Time until cumulative inclusion probability reaches 90% for the current scenario.
+      Time until cumulative inclusion probability reaches 90% for the current scenario. Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.
     </p>
+    <p id="escape-hatch-summary" class="t90-help">-</p>
 
     <details class="panel config-panel">
       <summary>
@@ -81,6 +87,10 @@
             <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>
             <small>1.0 means all new sequencers are honest</small>
           </label>
+          <label><span>Other EH candidates</span>
+            <input name="escape_hatch_other_candidates" type="number" min="0" max="8" step="1" required>
+            <small>1 user/group EH slot is assumed already bonded; this is the number of other bonded slots</small>
+          </label>
         </form>
         <div class="actions">
           <button id="run-btn" type="button">Run</button>
@@ -105,7 +115,7 @@
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">X-axis uses the full max horizon, with ticks showing USD, user sequencer count, and onboarding time. Y-axis is capped at 30 days (720h).</p>
+      <p class="note">X-axis uses the full max horizon, with ticks showing USD, user sequencer count, and onboarding time. Y-axis is capped at 30 days (720h). This chart excludes the escape hatch and shows only the sequencer-stake path.</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>

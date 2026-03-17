@@ -3,9 +3,19 @@
 const EPSILON = 1e-15;
 const DELAY_Y_CAP_HOURS = 30 * 24;
 const COMMITTEE_COLOR = "#2563EB";
+const COMMITTEE_EH_COLOR = "#059669";
 const NON_COMMITTEE_COLOR = "#F97316";
 
-// Example defaults aligned to the pending Aztec validator-selection upgrade.
+const EH_BOND_TOKENS = 332000000;
+const EH_WITHDRAWAL_TAX_TOKENS = 1660000;
+const EH_FREQUENCY_EPOCHS = 112;
+const EH_ACTIVE_DURATION_EPOCHS = 2;
+const EH_USER_CANDIDATE_SLOTS = 1;
+const EH_CIRCULATING_SUPPLY_TOKENS = 3000000000;
+const EH_MAX_OTHER_CANDIDATES =
+  Math.floor(EH_CIRCULATING_SUPPLY_TOKENS / EH_BOND_TOKENS) - EH_USER_CANDIDATE_SLOTS;
+
+// Example defaults aligned to the Aztec Alpha upgrade.
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
@@ -18,6 +28,7 @@ const DEFAULT_CONFIG = {
   validator_set_lag_epochs: 2,
   max_new_sequencers_per_epoch: 4,
   honest_add_success_rate: 0.5,
+  escape_hatch_other_candidates: 0,
 };
 
 const INTEGER_FIELDS = new Set([
@@ -28,6 +39,7 @@ const INTEGER_FIELDS = new Set([
   "epoch_slots",
   "validator_set_lag_epochs",
   "max_new_sequencers_per_epoch",
+  "escape_hatch_other_candidates",
 ]);
 
 const formEl = document.getElementById("config-form");
@@ -35,9 +47,12 @@ const statusEl = document.getElementById("status");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
 const t90CommitteeValueEl = document.getElementById("t90-committee-value");
+const t90CommitteeEhValueEl = document.getElementById("t90-committee-eh-value");
 const t90NonValueEl = document.getElementById("t90-non-value");
 const t90CommitteeCostEl = document.getElementById("t90-committee-cost");
+const t90CommitteeEhCostEl = document.getElementById("t90-committee-eh-cost");
 const t90NonCostEl = document.getElementById("t90-non-cost");
+const escapeHatchSummaryEl = document.getElementById("escape-hatch-summary");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
@@ -66,6 +81,13 @@ function t90CostText(usd, token) {
     return "Cost @T90: n/a";
   }
   return `Cost @T90: $${formatWholeNumber(usd)} | ${formatWholeNumber(token)} tok`;
+}
+
+function t90CommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd) {
+  const stakeText = stakeUsd === null || stakeToken === null
+    ? "stake @T90: n/a"
+    : `stake @T90: $${formatWholeNumber(stakeUsd)} | ${formatWholeNumber(stakeToken)} tok`;
+  return `${stakeText} | EH: $${formatWholeNumber(ehBondUsd)} lock + $${formatWholeNumber(ehTaxUsd)} tax`;
 }
 
 function clampProbability(value) {
@@ -134,6 +156,16 @@ function paddedBounds(values, relativePadding = 0.05, absolutePadding = 1.0) {
   return [lower - pad, lower + pad];
 }
 
+function formatDurationHours(hours) {
+  if (!Number.isFinite(hours)) {
+    return "n/a";
+  }
+  if (hours >= 48) {
+    return `${(hours / 24).toFixed(2)}d`;
+  }
+  return `${hours.toFixed(2)}h`;
+}
+
 function validateConfig(cfg) {
   const errors = [];
   if (cfg.base_sequencers < 0) {
@@ -171,6 +203,12 @@ function validateConfig(cfg) {
   }
   if (cfg.honest_add_success_rate <= 0 || cfg.honest_add_success_rate > 1) {
     errors.push("honest_add_success_rate must be in (0, 1]");
+  }
+  if (
+    cfg.escape_hatch_other_candidates < 0
+    || cfg.escape_hatch_other_candidates > EH_MAX_OTHER_CANDIDATES
+  ) {
+    errors.push(`escape_hatch_other_candidates must be in [0, ${EH_MAX_OTHER_CANDIDATES}]`);
   }
   const derivedSlots = Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
   if (derivedSlots <= 0) {
@@ -380,6 +418,58 @@ function maliciousSequencersForHonest(cfg, honestUserSeq) {
   return Math.max(0, Math.round((honestUserSeq * (1.0 - h)) / h));
 }
 
+function escapeHatchCycleSlots(cfg) {
+  return EH_FREQUENCY_EPOCHS * cfg.epoch_slots;
+}
+
+function escapeHatchOpenSlots(cfg) {
+  return Math.min(escapeHatchCycleSlots(cfg), EH_ACTIVE_DURATION_EPOCHS * cfg.epoch_slots);
+}
+
+function escapeHatchSelectionProbability(cfg) {
+  return EH_USER_CANDIDATE_SLOTS / (EH_USER_CANDIDATE_SLOTS + cfg.escape_hatch_other_candidates);
+}
+
+function escapeHatchSurvivalProbability(cfg, elapsedSlots) {
+  if (elapsedSlots <= 0) {
+    return 1.0;
+  }
+
+  const cycleSlots = escapeHatchCycleSlots(cfg);
+  const openSlots = escapeHatchOpenSlots(cfg);
+  const miss = 1.0 - escapeHatchSelectionProbability(cfg);
+  let totalSurvival = 0.0;
+
+  // Assume censorship starts at a random point within the hatch cycle.
+  // If the current hatch is open and the user's bonded slot was selected, they can force inclusion immediately.
+  for (let phaseSlots = 0; phaseSlots < cycleSlots; phaseSlots += 1) {
+    const attempts =
+      (phaseSlots < openSlots ? 1 : 0)
+      + Math.floor((elapsedSlots + phaseSlots) / cycleSlots);
+    totalSurvival += miss ** attempts;
+  }
+
+  return clampProbability(totalSurvival / cycleSlots);
+}
+
+function escapeHatchExpectedDelayHours(cfg) {
+  const cycleSlots = escapeHatchCycleSlots(cfg);
+  const openSlots = escapeHatchOpenSlots(cfg);
+  const selectionProbability = escapeHatchSelectionProbability(cfg);
+  let totalDelaySlots = 0.0;
+
+  for (let phaseSlots = 0; phaseSlots < cycleSlots; phaseSlots += 1) {
+    const nextHatchDelay = (cycleSlots / selectionProbability) - phaseSlots;
+    if (phaseSlots < openSlots) {
+      totalDelaySlots += (1.0 - selectionProbability) * nextHatchDelay;
+    } else {
+      totalDelaySlots += nextHatchDelay;
+    }
+  }
+
+  return (totalDelaySlots / cycleSlots) * (cfg.slot_seconds / 3600.0);
+}
+
 function horizonLogSurvival(cfg, model, targetUserSeq, committeeMode, slots, committeeSize = null) {
   if (slots <= 0) {
     return 0.0;
@@ -483,8 +573,10 @@ function buildTimeSeries(cfg, model) {
   const userSeq = [0];
   const nonProbs = [0.0];
   const comProbs = [0.0];
+  const comEhProbs = [0.0];
   const nonEffPerSlot = [0.0];
   const comEffPerSlot = [0.0];
+  const comEhEffPerSlot = [0.0];
 
   let logSurvivalNon = 0.0;
   let logSurvivalCom = 0.0;
@@ -520,12 +612,22 @@ function buildTimeSeries(cfg, model) {
     invested.push(currentUserSeq * usdPerSeq);
     userSeq.push(currentUserSeq);
 
+    const ehSurvival = escapeHatchSurvivalProbability(cfg, elapsedSlots);
+    const logSurvivalEh = ehSurvival <= 0.0 ? Number.NEGATIVE_INFINITY : Math.log(ehSurvival);
+    const logSurvivalComEh =
+      !Number.isFinite(logSurvivalCom) || !Number.isFinite(logSurvivalEh)
+        ? Number.NEGATIVE_INFINITY
+        : logSurvivalCom + logSurvivalEh;
+
     const pNon = horizonProbabilityFromLogSurvival(logSurvivalNon);
     const pCom = horizonProbabilityFromLogSurvival(logSurvivalCom);
+    const pComEh = horizonProbabilityFromLogSurvival(logSurvivalComEh);
     nonProbs.push(pNon);
     comProbs.push(pCom);
+    comEhProbs.push(pComEh);
     nonEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalNon, elapsedSlots));
     comEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalCom, elapsedSlots));
+    comEhEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalComEh, elapsedSlots));
   }
 
   return {
@@ -534,8 +636,10 @@ function buildTimeSeries(cfg, model) {
     userSeq,
     nonProbs,
     comProbs,
+    comEhProbs,
     nonEffPerSlot,
     comEffPerSlot,
+    comEhEffPerSlot,
   };
 }
 
@@ -640,15 +744,22 @@ function runSimulation(cfg) {
   const timeSeries = buildTimeSeries(cfg, model);
   const t90Target = 0.9;
   const t90CommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, t90Target);
+  const t90CommitteeEhIdx = firstIndexAtProbability(timeSeries.comEhProbs, t90Target);
   const t90NonCommitteeIdx = firstIndexAtProbability(timeSeries.nonProbs, t90Target);
   const t90CommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, t90Target);
+  const t90CommitteeEhDays = firstDayAtProbability(timeSeries.days, timeSeries.comEhProbs, t90Target);
   const t90NonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, t90Target);
   const t90CommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90CommitteeIdx);
+  const t90CommitteeEhHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90CommitteeEhIdx);
   const t90NonCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90NonCommitteeIdx);
   const t90CommitteeStakeToken = t90TokenCost(cfg, t90CommitteeHonestSeq);
+  const t90CommitteeEhStakeToken = t90TokenCost(cfg, t90CommitteeEhHonestSeq);
   const t90NonCommitteeStakeToken = t90TokenCost(cfg, t90NonCommitteeHonestSeq);
   const t90CommitteeStakeUsd = t90UsdCost(cfg, t90CommitteeStakeToken);
+  const t90CommitteeEhStakeUsd = t90UsdCost(cfg, t90CommitteeEhStakeToken);
   const t90NonCommitteeStakeUsd = t90UsdCost(cfg, t90NonCommitteeStakeToken);
+  const ehBondUsd = EH_BOND_TOKENS * cfg.token_usd;
+  const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
 
   return {
     rows,
@@ -662,11 +773,23 @@ function runSimulation(cfg) {
       delayYMin,
       delayYMax,
       t90CommitteeDays,
+      t90CommitteeEhDays,
       t90NonCommitteeDays,
       t90CommitteeStakeToken,
+      t90CommitteeEhStakeToken,
       t90NonCommitteeStakeToken,
       t90CommitteeStakeUsd,
+      t90CommitteeEhStakeUsd,
       t90NonCommitteeStakeUsd,
+      escapeHatchOtherCandidates: cfg.escape_hatch_other_candidates,
+      escapeHatchSelectionProbability: escapeHatchSelectionProbability(cfg),
+      escapeHatchFrequencyDays: (escapeHatchCycleSlots(cfg) * cfg.slot_seconds) / (24 * 3600),
+      escapeHatchActiveDurationHours: (escapeHatchOpenSlots(cfg) * cfg.slot_seconds) / 3600.0,
+      escapeHatchExpectedDelayHours: escapeHatchExpectedDelayHours(cfg),
+      escapeHatchBondToken: EH_BOND_TOKENS,
+      escapeHatchBondUsd: ehBondUsd,
+      escapeHatchWithdrawalTaxToken: EH_WITHDRAWAL_TAX_TOKENS,
+      escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
     },
     series: {
       invested,
@@ -678,11 +801,13 @@ function runSimulation(cfg) {
       cumulativeUserSeq: timeSeries.userSeq,
       cumulativeNonProbs: timeSeries.nonProbs,
       cumulativeComProbs: timeSeries.comProbs,
+      cumulativeComEhProbs: timeSeries.comEhProbs,
       perSlotDays: timeSeries.days,
       perSlotInvested: timeSeries.invested,
       perSlotUserSeq: timeSeries.userSeq,
       perSlotNonEffPerSlot: timeSeries.nonEffPerSlot,
       perSlotComEffPerSlot: timeSeries.comEffPerSlot,
+      perSlotComEhEffPerSlot: timeSeries.comEhEffPerSlot,
     },
   };
 }
@@ -817,6 +942,16 @@ function renderCharts(output) {
   const cumulativeData = [
     {
       x: cumulativeDays,
+      y: output.series.cumulativeComEhProbs,
+      mode: "lines",
+      name: "Committee + EH",
+      text: cumulativeHover,
+      hovertemplate: "%{text}<br>Cumulative probability: %{y:.6f}<extra>Committee + EH</extra>",
+      line: { color: COMMITTEE_EH_COLOR, width: 2 },
+      connectgaps: false,
+    },
+    {
+      x: cumulativeDays,
       y: output.series.cumulativeComProbs,
       mode: "lines",
       name: "Committee",
@@ -858,6 +993,16 @@ function renderCharts(output) {
   });
 
   const perSlotData = [
+    {
+      x: output.series.perSlotDays,
+      y: output.series.perSlotComEhEffPerSlot,
+      mode: "lines",
+      name: "Committee + EH",
+      text: perSlotHover,
+      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Committee + EH</extra>",
+      line: { color: COMMITTEE_EH_COLOR, width: 2 },
+      connectgaps: false,
+    },
     {
       x: output.series.perSlotDays,
       y: output.series.perSlotComEffPerSlot,
@@ -1013,15 +1158,37 @@ function runFromForm() {
     renderCharts(output);
 
     t90CommitteeValueEl.textContent = t90CardText(output.meta.t90CommitteeDays, cfg.max_horizon_days);
+    t90CommitteeEhValueEl.textContent = t90CardText(output.meta.t90CommitteeEhDays, cfg.max_horizon_days);
     t90NonValueEl.textContent = t90CardText(output.meta.t90NonCommitteeDays, cfg.max_horizon_days);
     t90CommitteeCostEl.textContent = t90CostText(output.meta.t90CommitteeStakeUsd, output.meta.t90CommitteeStakeToken);
+    t90CommitteeEhCostEl.textContent = t90CommitteeEhText(
+      output.meta.t90CommitteeEhStakeUsd,
+      output.meta.t90CommitteeEhStakeToken,
+      output.meta.escapeHatchBondUsd,
+      output.meta.escapeHatchWithdrawalTaxUsd
+    );
     t90NonCostEl.textContent = t90CostText(output.meta.t90NonCommitteeStakeUsd, output.meta.t90NonCommitteeStakeToken);
+    escapeHatchSummaryEl.textContent =
+      `Escape hatch fallback assumes 1 pre-positioned user/group slot and `
+      + `${output.meta.escapeHatchOtherCandidates} other bonded candidates. `
+      + `Selection chance per hatch: ${(100 * output.meta.escapeHatchSelectionProbability).toFixed(2)}%. `
+      + `A hatch opens every ${output.meta.escapeHatchFrequencyDays.toFixed(2)}d for `
+      + `${formatDurationHours(output.meta.escapeHatchActiveDurationHours)}. `
+      + `Bond stays active until selection or exit: `
+      + `${formatWholeNumber(output.meta.escapeHatchBondToken)} tok `
+      + `($${formatWholeNumber(output.meta.escapeHatchBondUsd)}) locked; `
+      + `exit tax always lost: ${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxToken)} tok `
+      + `($${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxUsd)}). `
+      + `EH-only expected wait: ${formatDurationHours(output.meta.escapeHatchExpectedDelayHours)}.`;
     setStatus("Simulation complete.");
   } catch (error) {
     t90CommitteeValueEl.textContent = "-";
+    t90CommitteeEhValueEl.textContent = "-";
     t90NonValueEl.textContent = "-";
     t90CommitteeCostEl.textContent = "Cost @T90: -";
+    t90CommitteeEhCostEl.textContent = "Cost @T90: -";
     t90NonCostEl.textContent = "Cost @T90: -";
+    escapeHatchSummaryEl.textContent = "-";
     setStatus(`Error: ${error.message}`, true);
   }
 }
