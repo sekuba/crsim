@@ -5,19 +5,19 @@ const DELAY_Y_CAP_HOURS = 30 * 24;
 const COMMITTEE_COLOR = "#2563EB";
 const NON_COMMITTEE_COLOR = "#F97316";
 
-// modeled after current aztec mainnet
+// Example defaults aligned to the pending Aztec validator-selection upgrade.
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
   token_usd: 0.02,
   censor_fraction: 0.67,
-  committee_size: 24,
+  committee_size: 48,
   slot_seconds: 72,
   max_horizon_days: 30,
   epoch_slots: 32,
+  validator_set_lag_epochs: 2,
   max_new_sequencers_per_epoch: 4,
   honest_add_success_rate: 0.5,
-  probability_near_one_margin: 0.001,
 };
 
 const INTEGER_FIELDS = new Set([
@@ -26,15 +26,14 @@ const INTEGER_FIELDS = new Set([
   "committee_size",
   "slot_seconds",
   "epoch_slots",
+  "validator_set_lag_epochs",
   "max_new_sequencers_per_epoch",
 ]);
 
 const formEl = document.getElementById("config-form");
 const statusEl = document.getElementById("status");
-const summaryEl = document.getElementById("summary");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
-const csvBtn = document.getElementById("csv-btn");
 const t90CommitteeValueEl = document.getElementById("t90-committee-value");
 const t90NonValueEl = document.getElementById("t90-non-value");
 const t90CommitteeCostEl = document.getElementById("t90-committee-cost");
@@ -42,8 +41,6 @@ const t90NonCostEl = document.getElementById("t90-non-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
-
-let latestCsv = "";
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -166,14 +163,14 @@ function validateConfig(cfg) {
   if (cfg.epoch_slots <= 0) {
     errors.push("epoch_slots must be > 0");
   }
+  if (cfg.validator_set_lag_epochs < 0) {
+    errors.push("validator_set_lag_epochs must be >= 0");
+  }
   if (cfg.max_new_sequencers_per_epoch <= 0) {
     errors.push("max_new_sequencers_per_epoch must be > 0");
   }
   if (cfg.honest_add_success_rate <= 0 || cfg.honest_add_success_rate > 1) {
     errors.push("honest_add_success_rate must be in (0, 1]");
-  }
-  if (cfg.probability_near_one_margin <= 0 || cfg.probability_near_one_margin >= 1) {
-    errors.push("probability_near_one_margin must be in (0, 1)");
   }
   const derivedSlots = Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
   if (derivedSlots <= 0) {
@@ -352,8 +349,21 @@ function epochFactors(model, activeUser, activeMalicious, slotsInEpoch, committe
   return [miss ** slotsInEpoch, geometricSum(miss, slotsInEpoch)];
 }
 
-function activeUserForEpoch(cfg, targetUserSeq, epochIdx) {
-  return Math.min(targetUserSeq, epochIdx * cfg.max_new_sequencers_per_epoch);
+// Aztec committees sample from a validator set that is lagged by a fixed number of epochs.
+function scheduledUserSequencersForEpoch(cfg, epochIdx, lagEpochs = 0) {
+  const effectiveEpochIdx = Math.max(0, epochIdx - lagEpochs);
+  return effectiveEpochIdx * cfg.max_new_sequencers_per_epoch;
+}
+
+function activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs = 0) {
+  return Math.min(targetUserSeq, scheduledUserSequencersForEpoch(cfg, epochIdx, lagEpochs));
+}
+
+function epochsToSteadyState(cfg, targetUserSeq, lagEpochs = 0) {
+  if (targetUserSeq <= 0) {
+    return 0;
+  }
+  return Math.ceil(targetUserSeq / cfg.max_new_sequencers_per_epoch) + lagEpochs;
 }
 
 function maliciousSequencersForHonest(cfg, honestUserSeq) {
@@ -371,12 +381,13 @@ function horizonLogSurvival(cfg, model, targetUserSeq, committeeMode, slots, com
   if (slots <= 0) {
     return 0.0;
   }
+  const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
   let logSurvival = 0.0;
   const epochs = Math.floor((slots + cfg.epoch_slots - 1) / cfg.epoch_slots);
   for (let epochIdx = 0; epochIdx < epochs; epochIdx += 1) {
     const startSlot = epochIdx * cfg.epoch_slots;
     const slotsInEpoch = Math.min(cfg.epoch_slots, slots - startSlot);
-    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx);
+    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs);
     const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
     const [f] = epochFactors(
       model,
@@ -420,12 +431,13 @@ function effectivePerSlotFromLogSurvival(logSurvival, slots) {
 }
 
 function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, committeeSize = null) {
-  const epochsToFull = Math.ceil(targetUserSeq / cfg.max_new_sequencers_per_epoch);
+  const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
+  const epochsToFull = epochsToSteadyState(cfg, targetUserSeq, lagEpochs);
   let survival = 1.0;
   let expectedSlots = 0.0;
 
   for (let epochIdx = 0; epochIdx < epochsToFull; epochIdx += 1) {
-    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx);
+    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs);
     const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
     const [f, g] = epochFactors(
       model,
@@ -477,10 +489,12 @@ function buildTimeSeries(cfg, model) {
     if (slotsInEpoch <= 0) {
       break;
     }
-    const activeUser = epochIdx * cfg.max_new_sequencers_per_epoch;
-    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
-    const [fNon] = epochFactors(model, activeUser, activeMalicious, slotsInEpoch, false);
-    const [fCom] = epochFactors(model, activeUser, activeMalicious, slotsInEpoch, true);
+    const activeUserNon = scheduledUserSequencersForEpoch(cfg, epochIdx);
+    const activeUserCom = scheduledUserSequencersForEpoch(cfg, epochIdx, cfg.validator_set_lag_epochs);
+    const activeMaliciousNon = maliciousSequencersForHonest(cfg, activeUserNon);
+    const activeMaliciousCom = maliciousSequencersForHonest(cfg, activeUserCom);
+    const [fNon] = epochFactors(model, activeUserNon, activeMaliciousNon, slotsInEpoch, false);
+    const [fCom] = epochFactors(model, activeUserCom, activeMaliciousCom, slotsInEpoch, true);
 
     if (fNon <= 0.0) {
       logSurvivalNon = Number.NEGATIVE_INFINITY;
@@ -495,8 +509,7 @@ function buildTimeSeries(cfg, model) {
     }
 
     elapsedSlots += slotsInEpoch;
-    // Value at this time point reflects the sequencers active during the slots just simulated.
-    const currentUserSeq = activeUser;
+    const currentUserSeq = activeUserNon;
     days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
     invested.push(currentUserSeq * usdPerSeq);
     userSeq.push(currentUserSeq);
@@ -570,7 +583,7 @@ function runSimulation(cfg) {
   const model = new SimulationModel(cfg);
   const rows = [];
 
-  // Keep row sampling on the full max-horizon range; cumulative charts may stop earlier.
+  // Sample the full horizon for the delay chart and regression checks.
   for (const userSeq of maxHorizonUserSeqValues(cfg)) {
     const maliciousSeq = maliciousSequencersForHonest(cfg, userSeq);
     const investedToken = userSeq * cfg.stake_per_sequencer_token;
@@ -630,39 +643,18 @@ function runSimulation(cfg) {
   const t90NonCommitteeStakeToken = t90TokenCost(cfg, t90NonCommitteeHonestSeq);
   const t90CommitteeStakeUsd = t90UsdCost(cfg, t90CommitteeStakeToken);
   const t90NonCommitteeStakeUsd = t90UsdCost(cfg, t90NonCommitteeStakeToken);
-  const targetProbability = 1.0 - cfg.probability_near_one_margin;
-  let cumulativeEndIdx = timeSeries.days.length - 1;
-  let cumulativeReachedTarget = false;
-  for (let i = 0; i < timeSeries.days.length; i += 1) {
-    if (timeSeries.nonProbs[i] >= targetProbability && timeSeries.comProbs[i] >= targetProbability) {
-      cumulativeEndIdx = i;
-      cumulativeReachedTarget = true;
-      break;
-    }
-  }
-  const toCumulativeSlice = (values) => values.slice(0, cumulativeEndIdx + 1);
 
   return {
     rows,
     meta: {
-      maxHorizonSlots: slots,
-      horizonTag,
       usdPerSeq,
       slotSeconds: cfg.slot_seconds,
       epochSlots: cfg.epoch_slots,
       maxNewSequencersPerEpoch: cfg.max_new_sequencers_per_epoch,
-      maxUserSequencers: maxUserSequencers(cfg),
-      userPointCount: rows.length,
       delayXMin,
       delayXMax,
       delayYMin,
       delayYMax,
-      cumulativeReachedTarget,
-      cumulativeTargetProbability: targetProbability,
-      cumulativeXMaxDays: timeSeries.days[cumulativeEndIdx],
-      cumulativeEndNonProb: timeSeries.nonProbs[cumulativeEndIdx],
-      cumulativeEndComProb: timeSeries.comProbs[cumulativeEndIdx],
-      t90TargetProbability: t90Target,
       t90CommitteeDays,
       t90NonCommitteeDays,
       t90CommitteeStakeToken,
@@ -675,11 +667,11 @@ function runSimulation(cfg) {
       userSeq,
       nonDelay,
       comDelay,
-      cumulativeDays: toCumulativeSlice(timeSeries.days),
-      cumulativeInvested: toCumulativeSlice(timeSeries.invested),
-      cumulativeUserSeq: toCumulativeSlice(timeSeries.userSeq),
-      cumulativeNonProbs: toCumulativeSlice(timeSeries.nonProbs),
-      cumulativeComProbs: toCumulativeSlice(timeSeries.comProbs),
+      cumulativeDays: timeSeries.days,
+      cumulativeInvested: timeSeries.invested,
+      cumulativeUserSeq: timeSeries.userSeq,
+      cumulativeNonProbs: timeSeries.nonProbs,
+      cumulativeComProbs: timeSeries.comProbs,
       perSlotDays: timeSeries.days,
       perSlotInvested: timeSeries.invested,
       perSlotUserSeq: timeSeries.userSeq,
@@ -687,17 +679,6 @@ function runSimulation(cfg) {
       perSlotComEffPerSlot: timeSeries.comEffPerSlot,
     },
   };
-}
-
-function buildUsdSeqTicks(xMin, xMax, usdPerSeq) {
-  const values = [];
-  const labels = [];
-  for (let i = 0; i <= 5; i += 1) {
-    const value = xMin + ((xMax - xMin) * i) / 5;
-    values.push(value);
-    labels.push(`$${Math.round(value).toLocaleString()} [${Math.round(value / usdPerSeq)}]`);
-  }
-  return { values, labels };
 }
 
 function formatDayTickLabel(days) {
@@ -949,34 +930,6 @@ function renderCharts(output) {
   Plotly.react(delayChartEl, delayData, delayLayout, plotConfig());
 }
 
-function csvEscape(value) {
-  let raw;
-  if (value === Number.POSITIVE_INFINITY) {
-    raw = "inf";
-  } else if (value === Number.NEGATIVE_INFINITY) {
-    raw = "-inf";
-  } else {
-    raw = String(value);
-  }
-
-  if (!raw.includes(",") && !raw.includes('"') && !raw.includes("\n")) {
-    return raw;
-  }
-  return `"${raw.replaceAll('"', '""')}"`;
-}
-
-function rowsToCsv(rows) {
-  if (!rows.length) {
-    return "";
-  }
-  const keys = Object.keys(rows[0]);
-  const lines = [keys.join(",")];
-  for (const row of rows) {
-    lines.push(keys.map((k) => csvEscape(row[k])).join(","));
-  }
-  return `${lines.join("\n")}\n`;
-}
-
 function getConfigFromForm() {
   const formData = new FormData(formEl);
   const cfg = {};
@@ -1021,6 +974,7 @@ function configFromUrl() {
 
 function configToUrl(cfg) {
   const params = new URLSearchParams(window.location.search);
+  params.delete("probability_near_one_margin");
 
   for (const [key, defaultValue] of Object.entries(DEFAULT_CONFIG)) {
     params.delete(key);
@@ -1034,21 +988,8 @@ function configToUrl(cfg) {
   window.history.replaceState({}, "", nextUrl);
 }
 
-function downloadTextFile(filename, content) {
-  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 function runFromForm() {
   setStatus("Running simulation...");
-  summaryEl.textContent = "";
 
   try {
     const cfg = getConfigFromForm();
@@ -1060,29 +1001,12 @@ function runFromForm() {
     configToUrl(cfg);
 
     const output = runSimulation(cfg);
-    latestCsv = rowsToCsv(output.rows);
-
     renderCharts(output);
 
     t90CommitteeValueEl.textContent = t90CardText(output.meta.t90CommitteeDays, cfg.max_horizon_days);
     t90NonValueEl.textContent = t90CardText(output.meta.t90NonCommitteeDays, cfg.max_horizon_days);
     t90CommitteeCostEl.textContent = t90CostText(output.meta.t90CommitteeStakeUsd, output.meta.t90CommitteeStakeToken);
     t90NonCostEl.textContent = t90CostText(output.meta.t90NonCommitteeStakeUsd, output.meta.t90NonCommitteeStakeToken);
-
-    const t90Label = `T${Math.round(output.meta.t90TargetProbability * 100)}`;
-    const formatT90 = (days) => {
-      if (days === null) {
-        return `not reached by ${cfg.max_horizon_days.toFixed(2)} days`;
-      }
-      return `${days.toFixed(2)} days`;
-    };
-    const t90Summary = `${t90Label}: committee ${formatT90(output.meta.t90CommitteeDays)}, non-committee ${formatT90(output.meta.t90NonCommitteeDays)}`;
-    const cumulativeTargetPct = (output.meta.cumulativeTargetProbability * 100).toFixed(3);
-    const cumulativeSummary = output.meta.cumulativeReachedTarget
-      ? `Cumulative >= ${cumulativeTargetPct}% by ${output.meta.cumulativeXMaxDays.toFixed(2)} days`
-      : `Cumulative at ${output.meta.cumulativeXMaxDays.toFixed(2)} days: committee ${(output.meta.cumulativeEndComProb * 100).toFixed(3)}%, non-committee ${(output.meta.cumulativeEndNonProb * 100).toFixed(3)}%`;
-    const assumptionsSummary = "Assumptions: onboarding updates at epoch boundaries; initial censor share is fixed from genesis; malicious additions are derived from honest_add_success_rate.";
-    summaryEl.textContent = `Max horizon slots: ${output.meta.maxHorizonSlots.toLocaleString()} | Max user sequencers: ${output.meta.maxUserSequencers.toLocaleString()} | Stake samples: ${output.meta.userPointCount.toLocaleString()} | ${t90Summary} | ${cumulativeSummary} | ${assumptionsSummary}`;
     setStatus("Simulation complete.");
   } catch (error) {
     t90CommitteeValueEl.textContent = "-";
@@ -1097,14 +1021,6 @@ runBtn.addEventListener("click", runFromForm);
 resetBtn.addEventListener("click", () => {
   setFormValues(DEFAULT_CONFIG);
   runFromForm();
-});
-csvBtn.addEventListener("click", () => {
-  if (!latestCsv) {
-    runFromForm();
-  }
-  if (latestCsv) {
-    downloadTextFile("cr_simulation.csv", latestCsv);
-  }
 });
 
 const initialConfig = configFromUrl();

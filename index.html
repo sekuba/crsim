@@ -11,7 +11,7 @@
   <main class="page">
     <header>
       <h1>CR sim for decentralized sequencers</h1>
-      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait (and how much they would have to stake) to circumvent censorship (include their transaction). Config defaults simulate current Aztec mainnet config.</p>
+      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction. Config defaults simulate Aztec mainnet 'Alpha' values.</p>
     </header>
 
     <section class="t90-strip" aria-live="polite">
@@ -27,7 +27,7 @@
       </article>
     </section>
     <p class="t90-help">
-      time until cumulative inclusion probability reaches 90% for a submitted transaction in the committee or non-committee scenario with the current configuration. check the config for scenario details.
+      Time until cumulative inclusion probability reaches 90% for the current scenario.
     </p>
 
     <details class="panel config-panel">
@@ -51,15 +51,15 @@
           </label>
           <label><span>Censor fraction</span>
             <input name="censor_fraction" type="number" min="0" max="1" step="any" required>
-            <small>init share censoring sequencers</small>
+            <small>initial share of censoring sequencers</small>
           </label>
           <label><span>Committee size</span>
             <input name="committee_size" type="number" min="1" step="1" required>
-            <small>sequencers per committee</small>
+            <small>validators sampled into each committee</small>
           </label>
           <label><span>Slot seconds</span>
             <input name="slot_seconds" type="number" min="1" step="1" required>
-            <small>smallest 'block' unit proposable</small>
+            <small>smallest proposable unit (checkpoint)</small>
           </label>
           <label><span>Max horizon days</span>
             <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
@@ -67,35 +67,33 @@
           </label>
           <label><span>Epoch slots</span>
             <input name="epoch_slots" type="number" min="1" step="1" required>
-            <small>committee reign period</small>
+            <small>slots per epoch</small>
+          </label>
+          <label><span>Validator-set lag (epochs)</span>
+            <input name="validator_set_lag_epochs" type="number" min="0" step="1" required>
+            <small>committee samples the validator set this many epochs in the past</small>
           </label>
           <label><span>Max new sequencers / epoch</span>
             <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
-            <small>entry churn rate</small>
+            <small>honest sequencers added per epoch</small>
           </label>
-          <label><span>Honest add success rate</span>
+          <label><span>Honest share of new sequencers</span>
             <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>
-            <small>honest share of sequencer adds</small>
-          </label>
-          <label><span>Probability near-one margin</span>
-            <input name="probability_near_one_margin" type="number" min="0.000000001" max="0.999999999" step="any" required>
-            <small>near-100% cutoff</small>
+            <small>1.0 means all new sequencers are honest</small>
           </label>
         </form>
         <div class="actions">
           <button id="run-btn" type="button">Run</button>
           <button id="reset-btn" type="button">Reset</button>
-          <button id="csv-btn" type="button">dl CSV</button>
         </div>
         <p id="status" class="status">Ready.</p>
-        <p id="summary" class="summary"></p>
       </div>
     </details>
 
     <section class="panel">
       <h2>Cumulative Inclusion Over Time</h2>
       <div id="chart-cumulative" class="chart-wrap"></div>
-      <p class="note">X-axis range expands until both curves reach 1 - probability_near_one_margin, bounded by max_horizon_days.</p>
+      <p class="note">X-axis uses the full max horizon.</p>
     </section>
 
     <section class="panel">
@@ -107,7 +105,7 @@
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">X-axis uses the full max_horizon_days range, with ticks showing USD, user sequencer count, and derived onboarding time. Y-axis is capped at 30 days (720h); values above the cap are hidden.</p>
+      <p class="note">X-axis uses the full max horizon, with ticks showing USD, user sequencer count, and onboarding time. Y-axis is capped at 30 days (720h).</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>

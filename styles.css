@@ -205,12 +205,6 @@ button:hover {
   min-height: 18px;
 }
 
-.summary {
-  margin: 0;
-  font-size: 13px;
-  color: #4a5562;
-}
-
 .chart-wrap {
   width: 100%;
   min-height: 540px;
