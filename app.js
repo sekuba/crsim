@@ -23,12 +23,12 @@ const DEFAULT_CONFIG = {
   censor_fraction: 0.5,
   committee_size: 48,
   slot_seconds: 72,
-  max_horizon_days: 30,
+  max_horizon_days: 10,
   epoch_slots: 32,
   validator_set_lag_epochs: 2,
   max_new_sequencers_per_epoch: 4,
-  honest_add_success_rate: 0.5,
-  escape_hatch_other_candidates: 0,
+  honest_add_success_rate: 0.6,
+  escape_hatch_other_candidates: 1,
 };
 
 const INTEGER_FIELDS = new Set([
@@ -325,9 +325,9 @@ class SimulationModel {
     return dist;
   }
 
-  committeeEpochFactors(userSeq, maliciousSeq, slotsInEpoch, committeeSize = null) {
-    const k = committeeSize === null ? this.cfg.committee_size : committeeSize;
-    const key = `${userSeq}|${maliciousSeq}|${slotsInEpoch}|${k}`;
+  committeeEpochFactors(userSeq, maliciousSeq, slotsInEpoch) {
+    const k = this.cfg.committee_size;
+    const key = `${userSeq}|${maliciousSeq}|${slotsInEpoch}`;
     if (this.cache.has(key)) {
       return this.cache.get(key);
     }
@@ -335,13 +335,12 @@ class SimulationModel {
     const totalSeq = this.cfg.base_sequencers + userSeq + maliciousSeq;
     const censorSeq = this.initialCensors + maliciousSeq;
     if (k > totalSeq) {
-      const fallback = [1.0, slotsInEpoch, 0.0];
+      const fallback = [1.0, slotsInEpoch];
       this.cache.set(key, fallback);
       return fallback;
     }
 
     const maxC = maxCensorsAllowed(k);
-    let pAllow = 0.0;
     let fTotal = 0.0;
     let gTotal = 0.0;
     let mass = 0.0;
@@ -352,7 +351,6 @@ class SimulationModel {
       let f = 1.0;
       let g = slotsInEpoch;
       if (censorCommittee <= maxC) {
-        pAllow += p;
         f = miss ** slotsInEpoch;
         g = geometricSum(miss, slotsInEpoch);
       }
@@ -362,13 +360,12 @@ class SimulationModel {
 
     let result;
     if (mass <= EPSILON) {
-      result = [1.0, slotsInEpoch, 0.0];
+      result = [1.0, slotsInEpoch];
     } else {
       const invMass = 1.0 / mass;
       result = [
         fTotal * invMass,
         gTotal * invMass,
-        clampProbability(pAllow * invMass),
       ];
     }
 
@@ -377,9 +374,9 @@ class SimulationModel {
   }
 }
 
-function epochFactors(model, activeUser, activeMalicious, slotsInEpoch, committeeMode, committeeSize = null) {
+function epochFactors(model, activeUser, activeMalicious, slotsInEpoch, committeeMode) {
   if (committeeMode) {
-    const [f, g] = model.committeeEpochFactors(activeUser, activeMalicious, slotsInEpoch, committeeSize);
+    const [f, g] = model.committeeEpochFactors(activeUser, activeMalicious, slotsInEpoch);
     return [f, g];
   }
   const pNon = model.pNonCommitteeSlot(activeUser, activeMalicious);
@@ -470,34 +467,6 @@ function escapeHatchExpectedDelayHours(cfg) {
   return (totalDelaySlots / cycleSlots) * (cfg.slot_seconds / 3600.0);
 }
 
-function horizonLogSurvival(cfg, model, targetUserSeq, committeeMode, slots, committeeSize = null) {
-  if (slots <= 0) {
-    return 0.0;
-  }
-  const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
-  let logSurvival = 0.0;
-  const epochs = Math.floor((slots + cfg.epoch_slots - 1) / cfg.epoch_slots);
-  for (let epochIdx = 0; epochIdx < epochs; epochIdx += 1) {
-    const startSlot = epochIdx * cfg.epoch_slots;
-    const slotsInEpoch = Math.min(cfg.epoch_slots, slots - startSlot);
-    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs);
-    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
-    const [f] = epochFactors(
-      model,
-      activeUser,
-      activeMalicious,
-      slotsInEpoch,
-      committeeMode,
-      committeeSize
-    );
-    if (f <= 0) {
-      return Number.NEGATIVE_INFINITY;
-    }
-    logSurvival += Math.log(f);
-  }
-  return logSurvival;
-}
-
 function horizonProbabilityFromLogSurvival(logSurvival) {
   if (!Number.isFinite(logSurvival) && logSurvival < 0) {
     return 1.0;
@@ -523,7 +492,7 @@ function effectivePerSlotFromLogSurvival(logSurvival, slots) {
   return clampProbability(p);
 }
 
-function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, committeeSize = null) {
+function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode) {
   const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
   const epochsToFull = epochsToSteadyState(cfg, targetUserSeq, lagEpochs);
   if (!Number.isFinite(epochsToFull)) {
@@ -540,8 +509,7 @@ function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, c
       activeUser,
       activeMalicious,
       cfg.epoch_slots,
-      committeeMode,
-      committeeSize
+      committeeMode
     );
     expectedSlots += survival * g;
     survival *= f;
@@ -553,8 +521,7 @@ function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode, c
     targetUserSeq,
     finalMalicious,
     cfg.epoch_slots,
-    committeeMode,
-    committeeSize
+    committeeMode
   );
   if (fFinal >= 1.0 - EPSILON) {
     return Number.POSITIVE_INFINITY;
@@ -682,50 +649,32 @@ function t90UsdCost(cfg, tokenCost) {
 }
 
 function runSimulation(cfg) {
-  const slots = maxHorizonSlots(cfg);
   const usdPerSeq = cfg.stake_per_sequencer_token * cfg.token_usd;
-  const horizonTag = `${cfg.max_horizon_days}d`;
-  const pHorizonNonKey = `p_${horizonTag}_non_committee_with_churn_exact`;
-  const pHorizonComKey = `p_${horizonTag}_committee_with_churn_exact`;
-  const pEffNonKey = `p_eff_${horizonTag}_non_committee_per_slot`;
-  const pEffComKey = `p_eff_${horizonTag}_committee_per_slot`;
-
   const model = new SimulationModel(cfg);
-  const rows = [];
+  const invested = [];
+  const delayUserSeq = [];
+  const nonDelay = [];
+  const comDelay = [];
+  const finiteDelayValues = [];
 
-  // Sample the full horizon for the delay chart and regression checks.
-  for (const userSeq of maxHorizonUserSeqValues(cfg)) {
-    const maliciousSeq = maliciousSequencersForHonest(cfg, userSeq);
-    const investedToken = userSeq * cfg.stake_per_sequencer_token;
-    const investedUsd = investedToken * cfg.token_usd;
-    const [, , pAllow] = model.committeeEpochFactors(userSeq, maliciousSeq, cfg.epoch_slots);
+  // Sample the full horizon for the delay chart.
+  for (const honestSeq of maxHorizonUserSeqValues(cfg)) {
+    const investedUsd = honestSeq * usdPerSeq;
+    const expectedHoursNon = expectedDelayHoursWithChurn(cfg, model, honestSeq, false);
+    const expectedHoursCom = expectedDelayHoursWithChurn(cfg, model, honestSeq, true);
 
-    const logSurvivalNon = horizonLogSurvival(cfg, model, userSeq, false, slots);
-    const logSurvivalCom = horizonLogSurvival(cfg, model, userSeq, true, slots);
+    invested.push(investedUsd);
+    delayUserSeq.push(honestSeq);
+    nonDelay.push(expectedHoursNon);
+    comDelay.push(expectedHoursCom);
 
-    rows.push({
-      user_sequencers: userSeq,
-      malicious_sequencers: maliciousSeq,
-      invested_stake_token: investedToken,
-      invested_stake_usd: investedUsd,
-      p_committee_allows_honest: pAllow,
-      [pHorizonNonKey]: horizonProbabilityFromLogSurvival(logSurvivalNon),
-      [pHorizonComKey]: horizonProbabilityFromLogSurvival(logSurvivalCom),
-      [pEffNonKey]: effectivePerSlotFromLogSurvival(logSurvivalNon, slots),
-      [pEffComKey]: effectivePerSlotFromLogSurvival(logSurvivalCom, slots),
-      expected_hours_non_committee: expectedDelayHoursWithChurn(cfg, model, userSeq, false),
-      expected_hours_committee: expectedDelayHoursWithChurn(cfg, model, userSeq, true),
-    });
+    if (Number.isFinite(expectedHoursNon)) {
+      finiteDelayValues.push(expectedHoursNon);
+    }
+    if (Number.isFinite(expectedHoursCom)) {
+      finiteDelayValues.push(expectedHoursCom);
+    }
   }
-
-  const invested = rows.map((r) => Number(r.invested_stake_usd));
-  const userSeq = rows.map((r) => Number(r.user_sequencers));
-  const nonDelay = rows.map((r) => r.expected_hours_non_committee);
-  const comDelay = rows.map((r) => r.expected_hours_committee);
-
-  const finiteDelayValues = rows
-    .flatMap((r) => [r.expected_hours_non_committee, r.expected_hours_committee])
-    .filter((v) => Number.isFinite(v));
 
   const visibleDelayValues = finiteDelayValues.filter((v) => v <= DELAY_Y_CAP_HOURS);
   const [delayXMin, delayXMax] = paddedBounds(invested, 0.05, usdPerSeq);
@@ -762,7 +711,6 @@ function runSimulation(cfg) {
   const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
 
   return {
-    rows,
     meta: {
       usdPerSeq,
       slotSeconds: cfg.slot_seconds,
@@ -793,7 +741,7 @@ function runSimulation(cfg) {
     },
     series: {
       invested,
-      userSeq,
+      userSeq: delayUserSeq,
       nonDelay,
       comDelay,
       cumulativeDays: timeSeries.days,
@@ -1128,7 +1076,6 @@ function configFromUrl() {
 
 function configToUrl(cfg) {
   const params = new URLSearchParams(window.location.search);
-  params.delete("probability_near_one_margin");
 
   for (const [key, defaultValue] of Object.entries(DEFAULT_CONFIG)) {
     params.delete(key);
