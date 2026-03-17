@@ -87,7 +87,7 @@ function t90CommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd) {
   const stakeText = stakeUsd === null || stakeToken === null
     ? "stake @T90: n/a"
     : `stake @T90: $${formatWholeNumber(stakeUsd)} | ${formatWholeNumber(stakeToken)} tok`;
-  return `${stakeText} | EH: $${formatWholeNumber(ehBondUsd)} lock + $${formatWholeNumber(ehTaxUsd)} tax`;
+  return `${stakeText} | EH lock: $${formatWholeNumber(ehBondUsd)} | exit tax later: $${formatWholeNumber(ehTaxUsd)}`;
 }
 
 function clampProbability(value) {
@@ -467,6 +467,10 @@ function escapeHatchExpectedDelayHours(cfg) {
   return (totalDelaySlots / cycleSlots) * (cfg.slot_seconds / 3600.0);
 }
 
+function escapeHatchExpectedOtherTaxToken(cfg) {
+  return cfg.escape_hatch_other_candidates * EH_WITHDRAWAL_TAX_TOKENS;
+}
+
 function horizonProbabilityFromLogSurvival(logSurvival) {
   if (!Number.isFinite(logSurvival) && logSurvival < 0) {
     return 1.0;
@@ -709,6 +713,8 @@ function runSimulation(cfg) {
   const t90NonCommitteeStakeUsd = t90UsdCost(cfg, t90NonCommitteeStakeToken);
   const ehBondUsd = EH_BOND_TOKENS * cfg.token_usd;
   const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
+  const ehOtherBondToken = cfg.escape_hatch_other_candidates * EH_BOND_TOKENS;
+  const ehOtherTaxToken = escapeHatchExpectedOtherTaxToken(cfg);
 
   return {
     meta: {
@@ -738,6 +744,10 @@ function runSimulation(cfg) {
       escapeHatchBondUsd: ehBondUsd,
       escapeHatchWithdrawalTaxToken: EH_WITHDRAWAL_TAX_TOKENS,
       escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
+      escapeHatchOtherBondToken: ehOtherBondToken,
+      escapeHatchOtherBondUsd: ehOtherBondToken * cfg.token_usd,
+      escapeHatchExpectedOtherTaxToken: ehOtherTaxToken,
+      escapeHatchExpectedOtherTaxUsd: ehOtherTaxToken * cfg.token_usd,
     },
     series: {
       invested,
@@ -1121,11 +1131,16 @@ function runFromForm() {
       + `Selection chance per hatch: ${(100 * output.meta.escapeHatchSelectionProbability).toFixed(2)}%. `
       + `A hatch opens every ${output.meta.escapeHatchFrequencyDays.toFixed(2)}d for `
       + `${formatDurationHours(output.meta.escapeHatchActiveDurationHours)}. `
-      + `Bond stays active until selection or exit: `
+      + `The user's bond stays active until selection or exit: `
       + `${formatWholeNumber(output.meta.escapeHatchBondToken)} tok `
-      + `($${formatWholeNumber(output.meta.escapeHatchBondUsd)}) locked; `
-      + `exit tax always lost: ${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxToken)} tok `
+      + `($${formatWholeNumber(output.meta.escapeHatchBondUsd)}) locked, with no EH tax paid before inclusion. `
+      + `If the user later exits, the tax is ${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxToken)} tok `
       + `($${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxUsd)}). `
+      + `Other EH participants keep ${formatWholeNumber(output.meta.escapeHatchOtherBondToken)} tok `
+      + `($${formatWholeNumber(output.meta.escapeHatchOtherBondUsd)}) locked, and if they want to stay in the pool after being selected, `
+      + `their coalition's expected tax burn until the user is selected is `
+      + `${formatWholeNumber(output.meta.escapeHatchExpectedOtherTaxToken)} tok `
+      + `($${formatWholeNumber(output.meta.escapeHatchExpectedOtherTaxUsd)}). `
       + `EH-only expected wait: ${formatDurationHours(output.meta.escapeHatchExpectedDelayHours)}.`;
     setStatus("Simulation complete.");
   } catch (error) {

@@ -16,7 +16,8 @@ as user-operated sequencers are added over time.
 - Committee mode: committee of size `committee_size` is sampled per epoch from a validator set lagged by `validator_set_lag_epochs`, and reused for that epoch's slots.
 - Committee gate: inclusion is allowed only when committee censors `<= floor((committee_size - 1) / 3)`.
 - Escape hatch fallback: assume the Alpha upgrade is active. The censored user/group already holds `1` bonded escape-hatch candidate slot before censorship begins, and `escape_hatch_other_candidates` models the other bonded slots. A hatch opens every `112` epochs for `2` epochs; if the user's slot is designated proposer for that hatch, they can bypass the committee during the open window.
-- Escape hatch bond: the `332,000,000` token bond stays active until the slot is selected or voluntarily exited. The exit tax of `1,660,000` tokens is always lost on exit.
+- Escape hatch bond: the user's `332,000,000` token bond stays active until the slot is selected or voluntarily exited, so the user does not pay the withdrawal tax before inclusion. The `1,660,000` token withdrawal tax is only paid on exit.
+- Other escape-hatch candidates: any other candidate selected for a hatch is removed from the active set. To keep the pool crowded after being selected, that candidate must later exit and rejoin, paying the withdrawal tax again. Under the model's one-user-slot assumption, the coalition's expected tax burn until the user is selected is `escape_hatch_other_candidates * withdrawal_tax`.
 - Combined committee + escape hatch output: overall survival is the product of committee-path survival and escape-hatch survival, i.e. the two fallback paths are treated as independent randomness sources.
 - Time horizon: `horizon_slots = floor(max_horizon_days * 24 * 3600 / slot_seconds)`.
 
