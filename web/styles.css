@@ -27,7 +27,7 @@ header p {
 
 .t90-strip {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 8px;
 }
@@ -45,6 +45,10 @@ header p {
 
 .t90-card-committee {
   background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+}
+
+.t90-card-committee-eh {
+  background: linear-gradient(135deg, #10b981, #047857);
 }
 
 .t90-label {
