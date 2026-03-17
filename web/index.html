@@ -74,8 +74,8 @@
             <small>committee samples the validator set this many epochs in the past</small>
           </label>
           <label><span>Max new sequencers / epoch</span>
-            <input name="max_new_sequencers_per_epoch" type="number" min="1" step="1" required>
-            <small>honest sequencers added per epoch</small>
+            <input name="max_new_sequencers_per_epoch" type="number" min="0" step="1" required>
+            <small>honest sequencers added per epoch; 0 keeps the sequencer set fixed</small>
           </label>
           <label><span>Honest share of new sequencers</span>
             <input name="honest_add_success_rate" type="number" min="0.000001" max="1" step="any" required>

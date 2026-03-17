@@ -9,7 +9,7 @@ as user-operated sequencers are added over time.
 
 ## Model (Current App Behavior)
 - Initial network: `base_sequencers` total, with censoring share `censor_fraction` fixed from genesis.
-- User onboarding: `max_new_sequencers_per_epoch` honest sequencers become active each epoch (`epoch_slots` slots).
+- User onboarding: `max_new_sequencers_per_epoch` honest sequencers become active each epoch (`epoch_slots` slots). If it is `0`, the sequencer set stays fixed for the full simulation.
 - Added-sequencer mix: malicious additions are derived from honest additions using `honest_add_success_rate` (in `(0, 1]`), so lower success rates increase censoring share over time.
 - Non-committee mode: slot proposer is drawn from all active sequencers.
 - Committee mode: committee of size `committee_size` is sampled per epoch from a validator set lagged by `validator_set_lag_epochs`, and reused for that epoch's slots.
