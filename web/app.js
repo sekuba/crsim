@@ -56,8 +56,6 @@ const targetNonValueEl = document.getElementById("target-non-value");
 const targetCommitteeCostEl = document.getElementById("target-committee-cost");
 const targetCommitteeEhCostEl = document.getElementById("target-committee-eh-cost");
 const targetNonCostEl = document.getElementById("target-non-cost");
-const targetHelpEl = document.getElementById("target-help");
-const escapeHatchSummaryEl = document.getElementById("escape-hatch-summary");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
@@ -75,19 +73,11 @@ function targetLabel(percent) {
   return `T${formatPercentValue(percent)}`;
 }
 
-function targetPercentText(percent) {
-  return `${formatPercentValue(percent)}%`;
-}
-
 function syncTargetLabels(cfg) {
   const label = targetLabel(cfg.target_inclusion_percent);
-  const percentText = targetPercentText(cfg.target_inclusion_percent);
   targetCommitteeLabelEl.textContent = `Committee ${label}`;
   targetCommitteeEhLabelEl.textContent = `Committee + EH ${label}`;
   targetNonLabelEl.textContent = `Non-committee ${label}`;
-  targetHelpEl.textContent =
-    `Time until cumulative inclusion probability reaches ${percentText} for the current scenario. `
-    + "Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.";
 }
 
 function formatHumanDurationDays(days) {
@@ -201,16 +191,6 @@ function paddedBounds(values, relativePadding = 0.05, absolutePadding = 1.0) {
   }
   const pad = Math.max(Math.abs(lower) * relativePadding, absolutePadding);
   return [lower - pad, lower + pad];
-}
-
-function formatDurationHours(hours) {
-  if (!Number.isFinite(hours)) {
-    return "n/a";
-  }
-  if (hours >= 48) {
-    return `${(hours / 24).toFixed(2)}d`;
-  }
-  return `${hours.toFixed(2)}h`;
 }
 
 function validateConfig(cfg) {
@@ -499,28 +479,6 @@ function escapeHatchSurvivalProbability(cfg, elapsedSlots) {
   return clampProbability(totalSurvival / cycleSlots);
 }
 
-function escapeHatchExpectedDelayHours(cfg) {
-  const cycleSlots = escapeHatchCycleSlots(cfg);
-  const openSlots = escapeHatchOpenSlots(cfg);
-  const selectionProbability = escapeHatchSelectionProbability(cfg);
-  let totalDelaySlots = 0.0;
-
-  for (let phaseSlots = 0; phaseSlots < cycleSlots; phaseSlots += 1) {
-    const nextHatchDelay = (cycleSlots / selectionProbability) - phaseSlots;
-    if (phaseSlots < openSlots) {
-      totalDelaySlots += (1.0 - selectionProbability) * nextHatchDelay;
-    } else {
-      totalDelaySlots += nextHatchDelay;
-    }
-  }
-
-  return (totalDelaySlots / cycleSlots) * (cfg.slot_seconds / 3600.0);
-}
-
-function escapeHatchExpectedOtherTaxToken(cfg) {
-  return cfg.escape_hatch_other_candidates * EH_WITHDRAWAL_TAX_TOKENS;
-}
-
 function horizonProbabilityFromLogSurvival(logSurvival) {
   if (!Number.isFinite(logSurvival) && logSurvival < 0) {
     return 1.0;
@@ -763,8 +721,6 @@ function runSimulation(cfg) {
   const targetNonCommitteeStakeUsd = targetUsdCost(cfg, targetNonCommitteeStakeToken);
   const ehBondUsd = EH_BOND_TOKENS * cfg.token_usd;
   const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
-  const ehOtherBondToken = cfg.escape_hatch_other_candidates * EH_BOND_TOKENS;
-  const ehOtherTaxToken = escapeHatchExpectedOtherTaxToken(cfg);
 
   return {
     meta: {
@@ -785,19 +741,8 @@ function runSimulation(cfg) {
       targetCommitteeStakeUsd,
       targetCommitteeEhStakeUsd,
       targetNonCommitteeStakeUsd,
-      escapeHatchOtherCandidates: cfg.escape_hatch_other_candidates,
-      escapeHatchSelectionProbability: escapeHatchSelectionProbability(cfg),
-      escapeHatchFrequencyDays: (escapeHatchCycleSlots(cfg) * cfg.slot_seconds) / (24 * 3600),
-      escapeHatchActiveDurationHours: (escapeHatchOpenSlots(cfg) * cfg.slot_seconds) / 3600.0,
-      escapeHatchExpectedDelayHours: escapeHatchExpectedDelayHours(cfg),
-      escapeHatchBondToken: EH_BOND_TOKENS,
       escapeHatchBondUsd: ehBondUsd,
-      escapeHatchWithdrawalTaxToken: EH_WITHDRAWAL_TAX_TOKENS,
       escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
-      escapeHatchOtherBondToken: ehOtherBondToken,
-      escapeHatchOtherBondUsd: ehOtherBondToken * cfg.token_usd,
-      escapeHatchExpectedOtherTaxToken: ehOtherTaxToken,
-      escapeHatchExpectedOtherTaxUsd: ehOtherTaxToken * cfg.token_usd,
     },
     series: {
       invested,
@@ -1186,23 +1131,6 @@ function runFromForm() {
       output.meta.targetNonCommitteeStakeToken,
       label
     );
-    escapeHatchSummaryEl.textContent =
-      `Escape hatch fallback assumes 1 pre-positioned user/group slot and `
-      + `${output.meta.escapeHatchOtherCandidates} other bonded candidates. `
-      + `Selection chance per hatch: ${(100 * output.meta.escapeHatchSelectionProbability).toFixed(2)}%. `
-      + `A hatch opens every ${output.meta.escapeHatchFrequencyDays.toFixed(2)}d for `
-      + `${formatDurationHours(output.meta.escapeHatchActiveDurationHours)}. `
-      + `The user's bond stays active until selection or exit: `
-      + `${formatWholeNumber(output.meta.escapeHatchBondToken)} tok `
-      + `($${formatWholeNumber(output.meta.escapeHatchBondUsd)}) locked, with no EH tax paid before inclusion. `
-      + `If the user later exits, the tax is ${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxToken)} tok `
-      + `($${formatWholeNumber(output.meta.escapeHatchWithdrawalTaxUsd)}). `
-      + `Other EH participants keep ${formatWholeNumber(output.meta.escapeHatchOtherBondToken)} tok `
-      + `($${formatWholeNumber(output.meta.escapeHatchOtherBondUsd)}) locked, and if they want to stay in the pool after being selected, `
-      + `their coalition's expected tax burn until the user is selected is `
-      + `${formatWholeNumber(output.meta.escapeHatchExpectedOtherTaxToken)} tok `
-      + `($${formatWholeNumber(output.meta.escapeHatchExpectedOtherTaxUsd)}). `
-      + `EH-only expected wait: ${formatDurationHours(output.meta.escapeHatchExpectedDelayHours)}.`;
     setStatus("Simulation complete.");
   } catch (error) {
     const label = targetLabel(cfg.target_inclusion_percent);
@@ -1212,7 +1140,6 @@ function runFromForm() {
     targetCommitteeCostEl.textContent = `Cost @${label}: -`;
     targetCommitteeEhCostEl.textContent = `stake @${label}: -`;
     targetNonCostEl.textContent = `Cost @${label}: -`;
-    escapeHatchSummaryEl.textContent = "-";
     setStatus(`Error: ${error.message}`, true);
   }
 }

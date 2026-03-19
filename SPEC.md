@@ -46,7 +46,6 @@ Validation:
 - Effective per-slot inclusion chart: uses full `max_horizon_days`.
 - Expected inclusion delay chart: uses full `max_horizon_days`; y-axis shown only up to 720 hours (30 days). This chart excludes the escape hatch and remains a sequencer-stake-only view.
 - Target cards show time to reach the configured cumulative inclusion probability for committee, committee + escape hatch, and non-committee modes.
-- Escape hatch summary shows the fixed bond, always-lost exit tax, per-hatch selection chance, and EH-only expected wait under the current scenario.
 
 ## UI Actions
 - `Run Simulation`: validate inputs, recompute data, rerender charts.
