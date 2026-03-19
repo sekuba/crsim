@@ -90,11 +90,30 @@ function syncTargetLabels(cfg) {
     + "Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.";
 }
 
+function formatHumanDurationDays(days) {
+  const totalSeconds = days * 24 * 3600;
+  if (totalSeconds >= 48 * 3600) {
+    return `${days.toFixed(2)}d`;
+  }
+
+  const totalHours = totalSeconds / 3600;
+  if (totalHours >= 1) {
+    return `${totalHours.toFixed(2)}h`;
+  }
+
+  const totalMinutes = totalSeconds / 60;
+  if (totalMinutes >= 1) {
+    return `${totalMinutes.toFixed(0)}m`;
+  }
+
+  return `${totalSeconds.toFixed(0)}s`;
+}
+
 function targetCardText(days, maxHorizonDays) {
   if (days === null) {
-    return `>${maxHorizonDays.toFixed(2)}d`;
+    return `>${formatHumanDurationDays(maxHorizonDays)}`;
   }
-  return `${days.toFixed(2)}d`;
+  return formatHumanDurationDays(days);
 }
 
 function formatWholeNumber(value) {
