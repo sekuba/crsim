@@ -24,6 +24,7 @@ const DEFAULT_CONFIG = {
   committee_size: 48,
   slot_seconds: 72,
   max_horizon_days: 10,
+  target_inclusion_percent: 90,
   epoch_slots: 32,
   validator_set_lag_epochs: 2,
   max_new_sequencers_per_epoch: 4,
@@ -46,12 +47,16 @@ const formEl = document.getElementById("config-form");
 const statusEl = document.getElementById("status");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
-const t90CommitteeValueEl = document.getElementById("t90-committee-value");
-const t90CommitteeEhValueEl = document.getElementById("t90-committee-eh-value");
-const t90NonValueEl = document.getElementById("t90-non-value");
-const t90CommitteeCostEl = document.getElementById("t90-committee-cost");
-const t90CommitteeEhCostEl = document.getElementById("t90-committee-eh-cost");
-const t90NonCostEl = document.getElementById("t90-non-cost");
+const targetCommitteeLabelEl = document.getElementById("target-committee-label");
+const targetCommitteeEhLabelEl = document.getElementById("target-committee-eh-label");
+const targetNonLabelEl = document.getElementById("target-non-label");
+const targetCommitteeValueEl = document.getElementById("target-committee-value");
+const targetCommitteeEhValueEl = document.getElementById("target-committee-eh-value");
+const targetNonValueEl = document.getElementById("target-non-value");
+const targetCommitteeCostEl = document.getElementById("target-committee-cost");
+const targetCommitteeEhCostEl = document.getElementById("target-committee-eh-cost");
+const targetNonCostEl = document.getElementById("target-non-cost");
+const targetHelpEl = document.getElementById("target-help");
 const escapeHatchSummaryEl = document.getElementById("escape-hatch-summary");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
@@ -62,7 +67,30 @@ function setStatus(message, isError = false) {
   statusEl.style.color = isError ? "#b42318" : "#334155";
 }
 
-function t90CardText(days, maxHorizonDays) {
+function formatPercentValue(value) {
+  return Number(value.toFixed(6)).toString();
+}
+
+function targetLabel(percent) {
+  return `T${formatPercentValue(percent)}`;
+}
+
+function targetPercentText(percent) {
+  return `${formatPercentValue(percent)}%`;
+}
+
+function syncTargetLabels(cfg) {
+  const label = targetLabel(cfg.target_inclusion_percent);
+  const percentText = targetPercentText(cfg.target_inclusion_percent);
+  targetCommitteeLabelEl.textContent = `Committee ${label}`;
+  targetCommitteeEhLabelEl.textContent = `Committee + EH ${label}`;
+  targetNonLabelEl.textContent = `Non-committee ${label}`;
+  targetHelpEl.textContent =
+    `Time until cumulative inclusion probability reaches ${percentText} for the current scenario. `
+    + "Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.";
+}
+
+function targetCardText(days, maxHorizonDays) {
   if (days === null) {
     return `>${maxHorizonDays.toFixed(2)}d`;
   }
@@ -76,17 +104,17 @@ function formatWholeNumber(value) {
   });
 }
 
-function t90CostText(usd, token) {
+function targetCostText(usd, token, label) {
   if (usd === null || token === null) {
-    return "Cost @T90: n/a";
+    return `Cost @${label}: n/a`;
   }
-  return `Cost @T90: $${formatWholeNumber(usd)} | ${formatWholeNumber(token)} tok`;
+  return `Cost @${label}: $${formatWholeNumber(usd)} | ${formatWholeNumber(token)} tok`;
 }
 
-function t90CommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd) {
+function targetCommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd, label) {
   const stakeText = stakeUsd === null || stakeToken === null
-    ? "stake @T90: n/a"
-    : `stake @T90: $${formatWholeNumber(stakeUsd)} | ${formatWholeNumber(stakeToken)} tok`;
+    ? `stake @${label}: n/a`
+    : `stake @${label}: $${formatWholeNumber(stakeUsd)} | ${formatWholeNumber(stakeToken)} tok`;
   return `${stakeText} | EH lock: $${formatWholeNumber(ehBondUsd)} | exit tax later: $${formatWholeNumber(ehTaxUsd)}`;
 }
 
@@ -191,6 +219,9 @@ function validateConfig(cfg) {
   }
   if (cfg.max_horizon_days <= 0) {
     errors.push("max_horizon_days must be > 0");
+  }
+  if (cfg.target_inclusion_percent <= 0 || cfg.target_inclusion_percent >= 100) {
+    errors.push("target_inclusion_percent must be in (0, 100)");
   }
   if (cfg.epoch_slots <= 0) {
     errors.push("epoch_slots must be > 0");
@@ -638,14 +669,14 @@ function valueAtIndexOrNull(values, idx) {
   return values[idx];
 }
 
-function t90TokenCost(cfg, honestSeqCount) {
+function targetTokenCost(cfg, honestSeqCount) {
   if (honestSeqCount === null) {
     return null;
   }
   return honestSeqCount * cfg.stake_per_sequencer_token;
 }
 
-function t90UsdCost(cfg, tokenCost) {
+function targetUsdCost(cfg, tokenCost) {
   if (tokenCost === null) {
     return null;
   }
@@ -695,22 +726,22 @@ function runSimulation(cfg) {
   }
 
   const timeSeries = buildTimeSeries(cfg, model);
-  const t90Target = 0.9;
-  const t90CommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, t90Target);
-  const t90CommitteeEhIdx = firstIndexAtProbability(timeSeries.comEhProbs, t90Target);
-  const t90NonCommitteeIdx = firstIndexAtProbability(timeSeries.nonProbs, t90Target);
-  const t90CommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, t90Target);
-  const t90CommitteeEhDays = firstDayAtProbability(timeSeries.days, timeSeries.comEhProbs, t90Target);
-  const t90NonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, t90Target);
-  const t90CommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90CommitteeIdx);
-  const t90CommitteeEhHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90CommitteeEhIdx);
-  const t90NonCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, t90NonCommitteeIdx);
-  const t90CommitteeStakeToken = t90TokenCost(cfg, t90CommitteeHonestSeq);
-  const t90CommitteeEhStakeToken = t90TokenCost(cfg, t90CommitteeEhHonestSeq);
-  const t90NonCommitteeStakeToken = t90TokenCost(cfg, t90NonCommitteeHonestSeq);
-  const t90CommitteeStakeUsd = t90UsdCost(cfg, t90CommitteeStakeToken);
-  const t90CommitteeEhStakeUsd = t90UsdCost(cfg, t90CommitteeEhStakeToken);
-  const t90NonCommitteeStakeUsd = t90UsdCost(cfg, t90NonCommitteeStakeToken);
+  const targetProbability = cfg.target_inclusion_percent / 100;
+  const targetCommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, targetProbability);
+  const targetCommitteeEhIdx = firstIndexAtProbability(timeSeries.comEhProbs, targetProbability);
+  const targetNonCommitteeIdx = firstIndexAtProbability(timeSeries.nonProbs, targetProbability);
+  const targetCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, targetProbability);
+  const targetCommitteeEhDays = firstDayAtProbability(timeSeries.days, timeSeries.comEhProbs, targetProbability);
+  const targetNonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, targetProbability);
+  const targetCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetCommitteeIdx);
+  const targetCommitteeEhHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetCommitteeEhIdx);
+  const targetNonCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetNonCommitteeIdx);
+  const targetCommitteeStakeToken = targetTokenCost(cfg, targetCommitteeHonestSeq);
+  const targetCommitteeEhStakeToken = targetTokenCost(cfg, targetCommitteeEhHonestSeq);
+  const targetNonCommitteeStakeToken = targetTokenCost(cfg, targetNonCommitteeHonestSeq);
+  const targetCommitteeStakeUsd = targetUsdCost(cfg, targetCommitteeStakeToken);
+  const targetCommitteeEhStakeUsd = targetUsdCost(cfg, targetCommitteeEhStakeToken);
+  const targetNonCommitteeStakeUsd = targetUsdCost(cfg, targetNonCommitteeStakeToken);
   const ehBondUsd = EH_BOND_TOKENS * cfg.token_usd;
   const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
   const ehOtherBondToken = cfg.escape_hatch_other_candidates * EH_BOND_TOKENS;
@@ -726,15 +757,15 @@ function runSimulation(cfg) {
       delayXMax,
       delayYMin,
       delayYMax,
-      t90CommitteeDays,
-      t90CommitteeEhDays,
-      t90NonCommitteeDays,
-      t90CommitteeStakeToken,
-      t90CommitteeEhStakeToken,
-      t90NonCommitteeStakeToken,
-      t90CommitteeStakeUsd,
-      t90CommitteeEhStakeUsd,
-      t90NonCommitteeStakeUsd,
+      targetCommitteeDays,
+      targetCommitteeEhDays,
+      targetNonCommitteeDays,
+      targetCommitteeStakeToken,
+      targetCommitteeEhStakeToken,
+      targetNonCommitteeStakeToken,
+      targetCommitteeStakeUsd,
+      targetCommitteeEhStakeUsd,
+      targetNonCommitteeStakeUsd,
       escapeHatchOtherCandidates: cfg.escape_hatch_other_candidates,
       escapeHatchSelectionProbability: escapeHatchSelectionProbability(cfg),
       escapeHatchFrequencyDays: (escapeHatchCycleSlots(cfg) * cfg.slot_seconds) / (24 * 3600),
@@ -1101,9 +1132,10 @@ function configToUrl(cfg) {
 
 function runFromForm() {
   setStatus("Running simulation...");
+  const cfg = getConfigFromForm();
+  syncTargetLabels(cfg);
 
   try {
-    const cfg = getConfigFromForm();
     const errors = validateConfig(cfg);
     if (errors.length) {
       throw new Error(errors.join(" | "));
@@ -1114,17 +1146,27 @@ function runFromForm() {
     const output = runSimulation(cfg);
     renderCharts(output);
 
-    t90CommitteeValueEl.textContent = t90CardText(output.meta.t90CommitteeDays, cfg.max_horizon_days);
-    t90CommitteeEhValueEl.textContent = t90CardText(output.meta.t90CommitteeEhDays, cfg.max_horizon_days);
-    t90NonValueEl.textContent = t90CardText(output.meta.t90NonCommitteeDays, cfg.max_horizon_days);
-    t90CommitteeCostEl.textContent = t90CostText(output.meta.t90CommitteeStakeUsd, output.meta.t90CommitteeStakeToken);
-    t90CommitteeEhCostEl.textContent = t90CommitteeEhText(
-      output.meta.t90CommitteeEhStakeUsd,
-      output.meta.t90CommitteeEhStakeToken,
-      output.meta.escapeHatchBondUsd,
-      output.meta.escapeHatchWithdrawalTaxUsd
+    const label = targetLabel(cfg.target_inclusion_percent);
+    targetCommitteeValueEl.textContent = targetCardText(output.meta.targetCommitteeDays, cfg.max_horizon_days);
+    targetCommitteeEhValueEl.textContent = targetCardText(output.meta.targetCommitteeEhDays, cfg.max_horizon_days);
+    targetNonValueEl.textContent = targetCardText(output.meta.targetNonCommitteeDays, cfg.max_horizon_days);
+    targetCommitteeCostEl.textContent = targetCostText(
+      output.meta.targetCommitteeStakeUsd,
+      output.meta.targetCommitteeStakeToken,
+      label
     );
-    t90NonCostEl.textContent = t90CostText(output.meta.t90NonCommitteeStakeUsd, output.meta.t90NonCommitteeStakeToken);
+    targetCommitteeEhCostEl.textContent = targetCommitteeEhText(
+      output.meta.targetCommitteeEhStakeUsd,
+      output.meta.targetCommitteeEhStakeToken,
+      output.meta.escapeHatchBondUsd,
+      output.meta.escapeHatchWithdrawalTaxUsd,
+      label
+    );
+    targetNonCostEl.textContent = targetCostText(
+      output.meta.targetNonCommitteeStakeUsd,
+      output.meta.targetNonCommitteeStakeToken,
+      label
+    );
     escapeHatchSummaryEl.textContent =
       `Escape hatch fallback assumes 1 pre-positioned user/group slot and `
       + `${output.meta.escapeHatchOtherCandidates} other bonded candidates. `
@@ -1144,12 +1186,13 @@ function runFromForm() {
       + `EH-only expected wait: ${formatDurationHours(output.meta.escapeHatchExpectedDelayHours)}.`;
     setStatus("Simulation complete.");
   } catch (error) {
-    t90CommitteeValueEl.textContent = "-";
-    t90CommitteeEhValueEl.textContent = "-";
-    t90NonValueEl.textContent = "-";
-    t90CommitteeCostEl.textContent = "Cost @T90: -";
-    t90CommitteeEhCostEl.textContent = "Cost @T90: -";
-    t90NonCostEl.textContent = "Cost @T90: -";
+    const label = targetLabel(cfg.target_inclusion_percent);
+    targetCommitteeValueEl.textContent = "-";
+    targetCommitteeEhValueEl.textContent = "-";
+    targetNonValueEl.textContent = "-";
+    targetCommitteeCostEl.textContent = `Cost @${label}: -`;
+    targetCommitteeEhCostEl.textContent = `stake @${label}: -`;
+    targetNonCostEl.textContent = `Cost @${label}: -`;
     escapeHatchSummaryEl.textContent = "-";
     setStatus(`Error: ${error.message}`, true);
   }

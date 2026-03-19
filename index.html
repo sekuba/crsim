@@ -16,22 +16,22 @@
 
     <section class="t90-strip" aria-live="polite">
       <article class="t90-card t90-card-committee">
-        <p class="t90-label">Committee T90</p>
-        <p id="t90-committee-value" class="t90-value">-</p>
-        <p id="t90-committee-cost" class="t90-meta">stake @T90: -</p>
+        <p id="target-committee-label" class="t90-label">Committee T90</p>
+        <p id="target-committee-value" class="t90-value">-</p>
+        <p id="target-committee-cost" class="t90-meta">Cost @T90: -</p>
       </article>
       <article class="t90-card t90-card-committee-eh">
-        <p class="t90-label">Committee + EH T90</p>
-        <p id="t90-committee-eh-value" class="t90-value">-</p>
-        <p id="t90-committee-eh-cost" class="t90-meta">stake @T90: -</p>
+        <p id="target-committee-eh-label" class="t90-label">Committee + EH T90</p>
+        <p id="target-committee-eh-value" class="t90-value">-</p>
+        <p id="target-committee-eh-cost" class="t90-meta">stake @T90: -</p>
       </article>
       <article class="t90-card t90-card-non">
-        <p class="t90-label">Non-committee T90</p>
-        <p id="t90-non-value" class="t90-value">-</p>
-        <p id="t90-non-cost" class="t90-meta">stake @T90: -</p>
+        <p id="target-non-label" class="t90-label">Non-committee T90</p>
+        <p id="target-non-value" class="t90-value">-</p>
+        <p id="target-non-cost" class="t90-meta">Cost @T90: -</p>
       </article>
     </section>
-    <p class="t90-help">
+    <p id="target-help" class="t90-help">
       Time until cumulative inclusion probability reaches 90% for the current scenario. Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.
     </p>
     <p id="escape-hatch-summary" class="t90-help">-</p>
@@ -70,6 +70,10 @@
           <label><span>Max horizon days</span>
             <input name="max_horizon_days" type="number" min="0.000001" step="any" required>
             <small>max simulation window</small>
+          </label>
+          <label><span>Target inclusion %</span>
+            <input name="target_inclusion_percent" type="number" min="0.000001" max="99.999999" step="any" required>
+            <small>cards use this cumulative inclusion threshold</small>
           </label>
           <label><span>Epoch slots</span>
             <input name="epoch_slots" type="number" min="1" step="1" required>
