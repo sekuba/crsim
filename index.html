@@ -11,7 +11,7 @@
   <main class="page">
     <header>
       <h1>CR sim for decentralized sequencers</h1>
-      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction. Config defaults simulate Aztec Alpha values, including the escape hatch fallback.</p>
+      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction with a given probability. Config defaults simulate Aztec Alpha values, including the escape hatch. The hardcoded quorum for c</p>
     </header>
 
     <section class="t90-strip" aria-live="polite">
@@ -31,10 +31,6 @@
         <p id="target-non-cost" class="t90-meta">Cost @T90: -</p>
       </article>
     </section>
-    <p id="target-help" class="t90-help">
-      Time until cumulative inclusion probability reaches 90% for the current scenario. Committee + EH adds one pre-positioned user/group escape-hatch candidate slot to the ordinary committee path.
-    </p>
-    <p id="escape-hatch-summary" class="t90-help">-</p>
 
     <details class="panel config-panel">
       <summary>
@@ -107,19 +103,16 @@
     <section class="panel">
       <h2>Cumulative Inclusion Over Time</h2>
       <div id="chart-cumulative" class="chart-wrap"></div>
-      <p class="note">X-axis uses the full max horizon.</p>
     </section>
 
     <section class="panel">
       <h2>Per-slot Inclusion</h2>
       <div id="chart-per-slot" class="chart-wrap"></div>
-      <p class="note">X-axis uses the full max_horizon_days range.</p>
     </section>
 
     <section class="panel">
       <h2>Inclusion Delay</h2>
       <div id="chart-delay" class="chart-wrap"></div>
-      <p class="note">X-axis uses the full max horizon, with ticks showing USD, user sequencer count, and onboarding time. Y-axis is capped at 30 days (720h). This chart excludes the escape hatch and shows only the sequencer-stake path.</p>
     </section>
   </main>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
