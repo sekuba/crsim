@@ -29,6 +29,7 @@ as user-operated sequencers are added over time.
 - `committee_size`
 - `slot_seconds`
 - `max_horizon_days`
+- `target_inclusion_percent`
 - `epoch_slots`
 - `validator_set_lag_epochs`
 - `max_new_sequencers_per_epoch`
@@ -37,13 +38,14 @@ as user-operated sequencers are added over time.
 
 Validation:
 - `committee_size` must be `<= base_sequencers` at simulation start.
+- `target_inclusion_percent` must be in `(0, 100)`.
 - `escape_hatch_other_candidates` must be in `[0, 8]`, based on the website assumption of `~3B` circulating AZTEC and at most one user/group slot.
 
 ## Outputs
 - Cumulative inclusion chart over elapsed days for the full `max_horizon_days`.
 - Effective per-slot inclusion chart: uses full `max_horizon_days`.
 - Expected inclusion delay chart: uses full `max_horizon_days`; y-axis shown only up to 720 hours (30 days). This chart excludes the escape hatch and remains a sequencer-stake-only view.
-- `T90` cards show time to reach 90% cumulative inclusion probability for committee, committee + escape hatch, and non-committee modes.
+- Target cards show time to reach the configured cumulative inclusion probability for committee, committee + escape hatch, and non-committee modes.
 - Escape hatch summary shows the fixed bond, always-lost exit tax, per-hatch selection chance, and EH-only expected wait under the current scenario.
 
 ## UI Actions
