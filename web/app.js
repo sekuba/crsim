@@ -124,7 +124,7 @@ function targetCommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd, label)
   const stakeText = stakeUsd === null || stakeToken === null
     ? `stake @${label}: n/a`
     : `stake @${label}: $${formatWholeNumber(stakeUsd)} | ${formatWholeNumber(stakeToken)} tok`;
-  return `${stakeText} | EH lock: $${formatWholeNumber(ehBondUsd)} | exit tax later: $${formatWholeNumber(ehTaxUsd)}`;
+  return `${stakeText} | EH lock: $${formatWholeNumber(ehBondUsd)} | exit tax: $${formatWholeNumber(ehTaxUsd)}`;
 }
 
 function clampProbability(value) {
