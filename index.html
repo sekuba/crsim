@@ -11,24 +11,24 @@
   <main class="page">
     <header>
       <h1>CR sim for decentralized sequencers</h1>
-      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction with a given probability. Config defaults simulate Aztec Alpha values, including the escape hatch. The hardcoded quorum for committees is 2/3.</p>
+      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction with a given probability. Config defaults model a static sequencer set with 49% censoring, a 99% inclusion target, and the escape hatch enabled. The hardcoded quorum for committees is 2/3.</p>
     </header>
 
     <section class="t90-strip" aria-live="polite">
       <article class="t90-card t90-card-committee">
-        <p id="target-committee-label" class="t90-label">Committee T90</p>
+        <p id="target-committee-label" class="t90-label">Committee T99</p>
         <p id="target-committee-value" class="t90-value">-</p>
-        <p id="target-committee-cost" class="t90-meta">Cost @T90: -</p>
+        <p id="target-committee-cost" class="t90-meta">Cost @T99: -</p>
       </article>
       <article class="t90-card t90-card-committee-eh">
-        <p id="target-committee-eh-label" class="t90-label">Committee + EH T90</p>
+        <p id="target-committee-eh-label" class="t90-label">Committee + EH T99</p>
         <p id="target-committee-eh-value" class="t90-value">-</p>
-        <p id="target-committee-eh-cost" class="t90-meta">stake @T90: -</p>
+        <p id="target-committee-eh-cost" class="t90-meta">stake @T99: -</p>
       </article>
       <article class="t90-card t90-card-non">
-        <p id="target-non-label" class="t90-label">Non-committee T90</p>
+        <p id="target-non-label" class="t90-label">Non-committee T99</p>
         <p id="target-non-value" class="t90-value">-</p>
-        <p id="target-non-cost" class="t90-meta">Cost @T90: -</p>
+        <p id="target-non-cost" class="t90-meta">Cost @T99: -</p>
       </article>
     </section>
 

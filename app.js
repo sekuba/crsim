@@ -15,20 +15,20 @@ const EH_CIRCULATING_SUPPLY_TOKENS = 3000000000;
 const EH_MAX_OTHER_CANDIDATES =
   Math.floor(EH_CIRCULATING_SUPPLY_TOKENS / EH_BOND_TOKENS) - EH_USER_CANDIDATE_SLOTS;
 
-// Example defaults aligned to the Aztec Alpha upgrade.
+// Default baseline: static sequencer set, 49% censoring, 99% inclusion target.
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
   token_usd: 0.02,
-  censor_fraction: 0.5,
+  censor_fraction: 0.50,
   committee_size: 48,
   slot_seconds: 72,
-  max_horizon_days: 10,
-  target_inclusion_percent: 90,
+  max_horizon_days: 20,
+  target_inclusion_percent: 99,
   epoch_slots: 32,
   validator_set_lag_epochs: 2,
-  max_new_sequencers_per_epoch: 4,
-  honest_add_success_rate: 0.6,
+  max_new_sequencers_per_epoch: 0,
+  honest_add_success_rate: 0.50,
   escape_hatch_other_candidates: 1,
 };
 
