@@ -6,7 +6,7 @@ Compare inclusion behavior for:
 - committee-based sequencing
 - committee-based sequencing with the Aztec Alpha escape hatch fallback
 
-as user-operated sequencers are added over time.
+under either a static sequencer set or configurable user-operated sequencer growth.
 
 ## Model (Current App Behavior)
 - Initial network: `base_sequencers` total, with censoring share `censor_fraction` fixed from genesis.
@@ -20,6 +20,11 @@ as user-operated sequencers are added over time.
 - Other escape-hatch candidates: any other candidate selected for a hatch is removed from the active set. To keep the pool crowded after being selected, that candidate must later exit and rejoin, paying the withdrawal tax again. Under the model's one-user-slot assumption, the coalition's expected tax burn until the user is selected is `escape_hatch_other_candidates * withdrawal_tax`.
 - Combined committee + escape hatch output: overall survival is the product of committee-path survival and escape-hatch survival, i.e. the two fallback paths are treated as independent randomness sources.
 - Time horizon: `horizon_slots = floor(max_horizon_days * 24 * 3600 / slot_seconds)`.
+
+## Reference Committee Baseline
+For the stationary committee-only baseline, the cleanest reference is a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
+- Runnable reference script: `python3 scripts/reference_committee_baseline.py`
+- Defaults match the app's current static preset; edit the constants at the top if needed
 
 ## Inputs
 - `base_sequencers`
