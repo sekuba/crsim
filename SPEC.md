@@ -24,7 +24,9 @@ under either a static sequencer set or configurable user-operated sequencer grow
 ## Reference Committee Baseline
 For the stationary committee-only baseline, the cleanest reference is a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
 - Runnable reference script: `python3 scripts/reference_committee_baseline.py`
-- Defaults match the app's current static preset; edit the constants at the top if needed
+- Full sweep CSV: `python3 scripts/reference_committee_baseline.py --sweep > /tmp/reference_committee_curve.csv`
+- The app also renders a dedicated reference chart: target inclusion delay vs. censorship fraction over the fixed base sequencer set
+- Defaults match the app's current static preset; CLI flags override the defaults without editing the script
 
 ## Inputs
 - `base_sequencers`
@@ -50,6 +52,7 @@ Validation:
 - Cumulative inclusion chart over elapsed days for the full `max_horizon_days`.
 - Effective per-slot inclusion chart: uses full `max_horizon_days`.
 - Expected inclusion delay chart: uses full `max_horizon_days`; y-axis shown only up to 720 hours (30 days). This chart excludes the escape hatch and remains a sequencer-stake-only view.
+- Reference committee baseline chart: static committee-only `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
 - Target cards show time to reach the configured cumulative inclusion probability for committee, committee + escape hatch, and non-committee modes.
 
 ## UI Actions
