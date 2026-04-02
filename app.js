@@ -5,6 +5,8 @@ const DELAY_Y_CAP_HOURS = 30 * 24;
 const COMMITTEE_COLOR = "#2563EB";
 const COMMITTEE_EH_COLOR = "#059669";
 const NON_COMMITTEE_COLOR = "#F97316";
+const REFERENCE_BASELINE_COLOR = "#0F172A";
+const REFERENCE_MARKER_COLOR = "#DC2626";
 
 const EH_BOND_TOKENS = 332000000;
 const EH_WITHDRAWAL_TAX_TOKENS = 1660000;
@@ -59,6 +61,7 @@ const targetNonCostEl = document.getElementById("target-non-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const delayChartEl = document.getElementById("chart-delay");
+const referenceBaselineChartEl = document.getElementById("chart-reference-baseline");
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -191,6 +194,16 @@ function paddedBounds(values, relativePadding = 0.05, absolutePadding = 1.0) {
   }
   const pad = Math.max(Math.abs(lower) * relativePadding, absolutePadding);
   return [lower - pad, lower + pad];
+}
+
+function paddedLogBounds(values, paddingDecades = 0.08) {
+  const lowerLog = Math.log10(Math.min(...values));
+  const upperLog = Math.log10(Math.max(...values));
+  if (upperLog - lowerLog > EPSILON) {
+    const span = upperLog - lowerLog;
+    return [lowerLog - (span * paddingDecades), upperLog + (span * paddingDecades)];
+  }
+  return [lowerLog - 0.5, upperLog + 0.5];
 }
 
 function validateConfig(cfg) {
@@ -542,6 +555,129 @@ function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode) {
   return expectedSlots * (cfg.slot_seconds / 3600.0);
 }
 
+function referenceCommitteeCensorCounts(totalSeq) {
+  const step = totalSeq <= 5000 ? 1 : Math.max(1, Math.floor(totalSeq / 2000));
+  const counts = [];
+  for (let count = 0; count <= totalSeq; count += step) {
+    counts.push(count);
+  }
+  if (counts[counts.length - 1] !== totalSeq) {
+    counts.push(totalSeq);
+  }
+  return counts;
+}
+
+function referenceCommitteeCurvePoint(cfg, model, censorCount) {
+  const partialSurvival = new Array(cfg.epoch_slots + 1).fill(0.0);
+  partialSurvival[0] = 1.0;
+  const committeeSize = cfg.committee_size;
+  const maxAllowed = maxCensorsAllowed(committeeSize);
+
+  for (const [committeeCensors, probability] of model.committeeDistribution(
+    cfg.base_sequencers,
+    censorCount,
+    committeeSize
+  )) {
+    if (committeeCensors > maxAllowed) {
+      for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
+        partialSurvival[slot] += probability;
+      }
+      continue;
+    }
+
+    const miss = committeeCensors / committeeSize;
+    let missPower = 1.0;
+    for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
+      missPower *= miss;
+      partialSurvival[slot] += probability * missPower;
+    }
+  }
+
+  const epochSurvival = partialSurvival[cfg.epoch_slots];
+  if (epochSurvival >= 1.0 - EPSILON) {
+    return {
+      epochSurvival,
+      targetSlots: Number.POSITIVE_INFINITY,
+      targetDays: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  const targetSurvival = 1.0 - (cfg.target_inclusion_percent / 100.0);
+  const logTargetSurvival = Math.log(targetSurvival);
+  let fullEpochsBeforeSearch = 0;
+  let logEpochSurvival = Number.NEGATIVE_INFINITY;
+
+  if (epochSurvival > 0.0) {
+    logEpochSurvival = Math.log(epochSurvival);
+    fullEpochsBeforeSearch = Math.max(0, Math.ceil(logTargetSurvival / logEpochSurvival) - 1);
+  }
+
+  const logPrefixSurvival =
+    fullEpochsBeforeSearch === 0 ? 0.0 : fullEpochsBeforeSearch * logEpochSurvival;
+
+  for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
+    const partial = partialSurvival[slot];
+    const logCandidateSurvival =
+      partial <= 0.0 ? Number.NEGATIVE_INFINITY : logPrefixSurvival + Math.log(partial);
+
+    if (logCandidateSurvival <= logTargetSurvival + 1e-12) {
+      const targetSlots = (fullEpochsBeforeSearch * cfg.epoch_slots) + slot;
+      return {
+        epochSurvival,
+        targetSlots,
+        targetDays: targetSlots * cfg.slot_seconds / (24 * 3600),
+      };
+    }
+  }
+
+  const targetSlots = (fullEpochsBeforeSearch + 1) * cfg.epoch_slots;
+  return {
+    epochSurvival,
+    targetSlots,
+    targetDays: targetSlots * cfg.slot_seconds / (24 * 3600),
+  };
+}
+
+function buildReferenceCommitteeCurve(cfg, model) {
+  const counts = referenceCommitteeCensorCounts(cfg.base_sequencers);
+  const fractions = [];
+  const delayDays = [];
+  const hover = [];
+  const finiteDelayDays = [];
+
+  for (const censorCount of counts) {
+    const point = referenceCommitteeCurvePoint(cfg, model, censorCount);
+    const censorFraction = censorCount / cfg.base_sequencers;
+    fractions.push(censorFraction);
+    delayDays.push(Number.isFinite(point.targetDays) ? point.targetDays : null);
+    hover.push(
+      `Censoring fraction: ${(censorFraction * 100).toFixed(2)}%`
+      + `<br>Censoring sequencers: ${censorCount.toLocaleString()} / ${cfg.base_sequencers.toLocaleString()}`
+      + `<br>Epoch survival: ${point.epochSurvival.toFixed(12)}`
+    );
+    if (Number.isFinite(point.targetDays) && point.targetDays > 0.0) {
+      finiteDelayDays.push(point.targetDays);
+    }
+  }
+
+  const currentCensorCount = Math.min(
+    cfg.base_sequencers,
+    Math.max(0, Math.round(cfg.base_sequencers * cfg.censor_fraction))
+  );
+  const currentPoint = referenceCommitteeCurvePoint(cfg, model, currentCensorCount);
+
+  return {
+    fractions,
+    delayDays,
+    hover,
+    finiteDelayDays,
+    currentFraction: currentCensorCount / cfg.base_sequencers,
+    currentDelayDays: currentPoint.targetDays,
+    currentEpochSurvival: currentPoint.epochSurvival,
+    currentCensorCount,
+  };
+}
+
 function buildTimeSeries(cfg, model) {
   const maxSlots = maxHorizonSlots(cfg);
   const maxEpochs = Math.floor((maxSlots + cfg.epoch_slots - 1) / cfg.epoch_slots);
@@ -703,6 +839,10 @@ function runSimulation(cfg) {
   }
 
   const timeSeries = buildTimeSeries(cfg, model);
+  const referenceCurve = buildReferenceCommitteeCurve(cfg, model);
+  const [referenceDelayLogMin, referenceDelayLogMax] = referenceCurve.finiteDelayDays.length
+    ? paddedLogBounds(referenceCurve.finiteDelayDays)
+    : [-4, 1];
   const targetProbability = cfg.target_inclusion_percent / 100;
   const targetCommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, targetProbability);
   const targetCommitteeEhIdx = firstIndexAtProbability(timeSeries.comEhProbs, targetProbability);
@@ -724,6 +864,7 @@ function runSimulation(cfg) {
 
   return {
     meta: {
+      targetInclusionPercent: cfg.target_inclusion_percent,
       usdPerSeq,
       slotSeconds: cfg.slot_seconds,
       epochSlots: cfg.epoch_slots,
@@ -732,6 +873,8 @@ function runSimulation(cfg) {
       delayXMax,
       delayYMin,
       delayYMax,
+      referenceDelayLogMin,
+      referenceDelayLogMax,
       targetCommitteeDays,
       targetCommitteeEhDays,
       targetNonCommitteeDays,
@@ -761,6 +904,17 @@ function runSimulation(cfg) {
       perSlotNonEffPerSlot: timeSeries.nonEffPerSlot,
       perSlotComEffPerSlot: timeSeries.comEffPerSlot,
       perSlotComEhEffPerSlot: timeSeries.comEhEffPerSlot,
+      referenceFractions: referenceCurve.fractions,
+      referenceDelayDays: referenceCurve.delayDays,
+      referenceHover: referenceCurve.hover,
+      referenceCurrentFraction: referenceCurve.currentFraction,
+      referenceCurrentDelayDays: Number.isFinite(referenceCurve.currentDelayDays)
+        ? referenceCurve.currentDelayDays
+        : null,
+      referenceCurrentHover: `Current config`
+        + `<br>Censoring fraction: ${(referenceCurve.currentFraction * 100).toFixed(2)}%`
+        + `<br>Censoring sequencers: ${referenceCurve.currentCensorCount.toLocaleString()} / ${cfg.base_sequencers.toLocaleString()}`
+        + `<br>Epoch survival: ${referenceCurve.currentEpochSurvival.toFixed(12)}`,
     },
   };
 }
@@ -1032,9 +1186,51 @@ function renderCharts(output) {
     },
   ];
 
+  const referenceXTicks = {
+    values: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    labels: ["0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"],
+  };
+  const referenceLayout = baseLayout(
+    "Censorship fraction among the fixed base sequencer set",
+    `Time to ${targetLabel(output.meta.targetInclusionPercent)} inclusion (days, log scale)`,
+    [0, 1],
+    [output.meta.referenceDelayLogMin, output.meta.referenceDelayLogMax],
+    referenceXTicks
+  );
+  referenceLayout.yaxis.type = "log";
+  const referenceData = [
+    {
+      x: output.series.referenceFractions,
+      y: output.series.referenceDelayDays,
+      mode: "lines",
+      name: "Reference committee baseline",
+      text: output.series.referenceHover,
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Reference committee baseline</extra>",
+      line: { color: REFERENCE_BASELINE_COLOR, width: 2.5 },
+      connectgaps: false,
+    },
+  ];
+
+  if (output.series.referenceCurrentDelayDays !== null) {
+    referenceData.push({
+      x: [output.series.referenceCurrentFraction],
+      y: [output.series.referenceCurrentDelayDays],
+      mode: "markers",
+      name: "Current config",
+      text: [output.series.referenceCurrentHover],
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config</extra>",
+      marker: {
+        color: REFERENCE_MARKER_COLOR,
+        size: 9,
+        line: { color: "#ffffff", width: 1.5 },
+      },
+    });
+  }
+
   Plotly.react(cumulativeChartEl, cumulativeData, cumulativeLayout, plotConfig());
   Plotly.react(perSlotChartEl, perSlotData, perSlotLayout, plotConfig());
   Plotly.react(delayChartEl, delayData, delayLayout, plotConfig());
+  Plotly.react(referenceBaselineChartEl, referenceData, referenceLayout, plotConfig());
 }
 
 function getConfigFromForm() {
