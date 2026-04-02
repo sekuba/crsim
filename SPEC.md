@@ -24,9 +24,8 @@ under either a static sequencer set or configurable user-operated sequencer grow
 ## Reference Committee Baseline
 For the stationary committee-only baseline, the cleanest reference is a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
 - Runnable reference script: `python3 scripts/reference_committee_baseline.py`
-- Full sweep CSV: `python3 scripts/reference_committee_baseline.py --sweep > /tmp/reference_committee_curve.csv`
 - The app also renders a dedicated reference chart: target inclusion delay vs. censorship fraction over the fixed base sequencer set
-- Defaults match the app's current static preset; CLI flags override the defaults without editing the script
+- Defaults match the app's current static preset; edit the constants at the top if needed
 
 ## Inputs
 - `base_sequencers`
