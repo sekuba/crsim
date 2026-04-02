@@ -130,6 +130,38 @@ function targetCommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd, label)
   return `${stakeText} | EH lock: $${formatWholeNumber(ehBondUsd)} | exit tax: $${formatWholeNumber(ehTaxUsd)}`;
 }
 
+function renderTargetCards(meta, maxHorizonDays, label) {
+  targetCommitteeValueEl.textContent = targetCardText(meta.targetCommitteeDays, maxHorizonDays);
+  targetCommitteeEhValueEl.textContent = targetCardText(meta.targetCommitteeEhDays, maxHorizonDays);
+  targetNonValueEl.textContent = targetCardText(meta.targetNonCommitteeDays, maxHorizonDays);
+  targetCommitteeCostEl.textContent = targetCostText(
+    meta.targetCommitteeStakeUsd,
+    meta.targetCommitteeStakeToken,
+    label
+  );
+  targetCommitteeEhCostEl.textContent = targetCommitteeEhText(
+    meta.targetCommitteeEhStakeUsd,
+    meta.targetCommitteeEhStakeToken,
+    meta.escapeHatchBondUsd,
+    meta.escapeHatchWithdrawalTaxUsd,
+    label
+  );
+  targetNonCostEl.textContent = targetCostText(
+    meta.targetNonCommitteeStakeUsd,
+    meta.targetNonCommitteeStakeToken,
+    label
+  );
+}
+
+function clearTargetCards(label) {
+  targetCommitteeValueEl.textContent = "-";
+  targetCommitteeEhValueEl.textContent = "-";
+  targetNonValueEl.textContent = "-";
+  targetCommitteeCostEl.textContent = `Cost @${label}: -`;
+  targetCommitteeEhCostEl.textContent = `stake @${label}: -`;
+  targetNonCostEl.textContent = `Cost @${label}: -`;
+}
+
 function clampProbability(value) {
   if (value <= 0.0) {
     return 0.0;
@@ -254,12 +286,9 @@ function maxHorizonSlots(cfg) {
   return Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
 }
 
-function maxUserSequencers(cfg) {
-  return Math.floor(maxHorizonSlots(cfg) / cfg.epoch_slots) * cfg.max_new_sequencers_per_epoch;
-}
-
 function maxHorizonUserSeqValues(cfg) {
-  const maxSeq = maxUserSequencers(cfg);
+  const maxSeq =
+    Math.floor(maxHorizonSlots(cfg) / cfg.epoch_slots) * cfg.max_new_sequencers_per_epoch;
   if (maxSeq <= 0) {
     return [0];
   }
@@ -731,51 +760,32 @@ function buildTimeSeries(cfg, model) {
     days,
     invested,
     userSeq,
-    nonProbs,
-    comProbs,
-    comEhProbs,
-    nonEffPerSlot,
-    comEffPerSlot,
-    comEhEffPerSlot,
+    cumulative: {
+      non: nonProbs,
+      com: comProbs,
+      comEh: comEhProbs,
+    },
+    perSlot: {
+      non: nonEffPerSlot,
+      com: comEffPerSlot,
+      comEh: comEhEffPerSlot,
+    },
   };
 }
 
-function firstIndexAtProbability(probabilities, threshold) {
-  for (let i = 0; i < probabilities.length; i += 1) {
-    if (probabilities[i] >= threshold) {
-      return i;
+function targetResult(days, userSeq, probabilities, threshold, stakePerSequencerToken, tokenUsd) {
+  for (let idx = 0; idx < probabilities.length && idx < days.length && idx < userSeq.length; idx += 1) {
+    if (probabilities[idx] < threshold) {
+      continue;
     }
+    const stakeToken = userSeq[idx] * stakePerSequencerToken;
+    return {
+      days: days[idx],
+      stakeToken,
+      stakeUsd: stakeToken * tokenUsd,
+    };
   }
-  return null;
-}
-
-function firstDayAtProbability(days, probabilities, threshold) {
-  const idx = firstIndexAtProbability(probabilities, threshold);
-  if (idx === null || idx >= days.length) {
-    return null;
-  }
-  return days[idx];
-}
-
-function valueAtIndexOrNull(values, idx) {
-  if (idx === null || idx < 0 || idx >= values.length) {
-    return null;
-  }
-  return values[idx];
-}
-
-function targetTokenCost(cfg, honestSeqCount) {
-  if (honestSeqCount === null) {
-    return null;
-  }
-  return honestSeqCount * cfg.stake_per_sequencer_token;
-}
-
-function targetUsdCost(cfg, tokenCost) {
-  if (tokenCost === null) {
-    return null;
-  }
-  return tokenCost * cfg.token_usd;
+  return { days: null, stakeToken: null, stakeUsd: null };
 }
 
 function runSimulation(cfg) {
@@ -823,21 +833,30 @@ function runSimulation(cfg) {
   const timeSeries = buildTimeSeries(cfg, model);
   const reference = buildReferenceCommitteeCurve(cfg, model);
   const targetProbability = cfg.target_inclusion_percent / 100;
-  const targetCommitteeIdx = firstIndexAtProbability(timeSeries.comProbs, targetProbability);
-  const targetCommitteeEhIdx = firstIndexAtProbability(timeSeries.comEhProbs, targetProbability);
-  const targetNonCommitteeIdx = firstIndexAtProbability(timeSeries.nonProbs, targetProbability);
-  const targetCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.comProbs, targetProbability);
-  const targetCommitteeEhDays = firstDayAtProbability(timeSeries.days, timeSeries.comEhProbs, targetProbability);
-  const targetNonCommitteeDays = firstDayAtProbability(timeSeries.days, timeSeries.nonProbs, targetProbability);
-  const targetCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetCommitteeIdx);
-  const targetCommitteeEhHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetCommitteeEhIdx);
-  const targetNonCommitteeHonestSeq = valueAtIndexOrNull(timeSeries.userSeq, targetNonCommitteeIdx);
-  const targetCommitteeStakeToken = targetTokenCost(cfg, targetCommitteeHonestSeq);
-  const targetCommitteeEhStakeToken = targetTokenCost(cfg, targetCommitteeEhHonestSeq);
-  const targetNonCommitteeStakeToken = targetTokenCost(cfg, targetNonCommitteeHonestSeq);
-  const targetCommitteeStakeUsd = targetUsdCost(cfg, targetCommitteeStakeToken);
-  const targetCommitteeEhStakeUsd = targetUsdCost(cfg, targetCommitteeEhStakeToken);
-  const targetNonCommitteeStakeUsd = targetUsdCost(cfg, targetNonCommitteeStakeToken);
+  const committeeTarget = targetResult(
+    timeSeries.days,
+    timeSeries.userSeq,
+    timeSeries.cumulative.com,
+    targetProbability,
+    cfg.stake_per_sequencer_token,
+    cfg.token_usd
+  );
+  const committeeEhTarget = targetResult(
+    timeSeries.days,
+    timeSeries.userSeq,
+    timeSeries.cumulative.comEh,
+    targetProbability,
+    cfg.stake_per_sequencer_token,
+    cfg.token_usd
+  );
+  const nonCommitteeTarget = targetResult(
+    timeSeries.days,
+    timeSeries.userSeq,
+    timeSeries.cumulative.non,
+    targetProbability,
+    cfg.stake_per_sequencer_token,
+    cfg.token_usd
+  );
   const ehBondUsd = EH_BOND_TOKENS * cfg.token_usd;
   const ehWithdrawalTaxUsd = EH_WITHDRAWAL_TAX_TOKENS * cfg.token_usd;
 
@@ -852,35 +871,26 @@ function runSimulation(cfg) {
       delayXMax,
       delayYMin,
       delayYMax,
-      targetCommitteeDays,
-      targetCommitteeEhDays,
-      targetNonCommitteeDays,
-      targetCommitteeStakeToken,
-      targetCommitteeEhStakeToken,
-      targetNonCommitteeStakeToken,
-      targetCommitteeStakeUsd,
-      targetCommitteeEhStakeUsd,
-      targetNonCommitteeStakeUsd,
+      targetCommitteeDays: committeeTarget.days,
+      targetCommitteeEhDays: committeeEhTarget.days,
+      targetNonCommitteeDays: nonCommitteeTarget.days,
+      targetCommitteeStakeToken: committeeTarget.stakeToken,
+      targetCommitteeEhStakeToken: committeeEhTarget.stakeToken,
+      targetNonCommitteeStakeToken: nonCommitteeTarget.stakeToken,
+      targetCommitteeStakeUsd: committeeTarget.stakeUsd,
+      targetCommitteeEhStakeUsd: committeeEhTarget.stakeUsd,
+      targetNonCommitteeStakeUsd: nonCommitteeTarget.stakeUsd,
       escapeHatchBondUsd: ehBondUsd,
       escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
     },
     series: {
-      invested,
-      userSeq: delayUserSeq,
-      nonDelay,
-      comDelay,
-      cumulativeDays: timeSeries.days,
-      cumulativeInvested: timeSeries.invested,
-      cumulativeUserSeq: timeSeries.userSeq,
-      cumulativeNonProbs: timeSeries.nonProbs,
-      cumulativeComProbs: timeSeries.comProbs,
-      cumulativeComEhProbs: timeSeries.comEhProbs,
-      perSlotDays: timeSeries.days,
-      perSlotInvested: timeSeries.invested,
-      perSlotUserSeq: timeSeries.userSeq,
-      perSlotNonEffPerSlot: timeSeries.nonEffPerSlot,
-      perSlotComEffPerSlot: timeSeries.comEffPerSlot,
-      perSlotComEhEffPerSlot: timeSeries.comEhEffPerSlot,
+      delay: {
+        invested,
+        userSeq: delayUserSeq,
+        nonHours: nonDelay,
+        comHours: comDelay,
+      },
+      time: timeSeries,
       reference,
     },
   };
@@ -943,6 +953,14 @@ function buildUsdSeqTimeTicks(xMinUsd, xMaxUsd, slotSeconds, epochSlots, maxNewP
   return { values, labels };
 }
 
+function buildTimeHover(days, invested, userSeq) {
+  return days.map((day, idx) => {
+    const usd = Math.round(invested[idx]).toLocaleString();
+    const seq = userSeq[idx].toLocaleString();
+    return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
+  });
+}
+
 function toVisibleY(values, yMin, yMax) {
   return values.map((v) => {
     if (!Number.isFinite(v)) {
@@ -964,26 +982,32 @@ function plotConfig() {
 }
 
 function baseLayout(xLabel, yLabel, xRange, yRange, xTicks) {
+  const xaxis = {
+    title: xLabel,
+    tickmode: "array",
+    tickvals: xTicks.values,
+    ticktext: xTicks.labels,
+    gridcolor: "#eef2f7",
+    zeroline: false,
+  };
+  const yaxis = {
+    title: yLabel,
+    gridcolor: "#eef2f7",
+    zeroline: false,
+  };
+  if (xRange !== undefined) {
+    xaxis.range = xRange;
+  }
+  if (yRange !== undefined) {
+    yaxis.range = yRange;
+  }
   return {
     margin: { l: 70, r: 30, t: 50, b: 60 },
     paper_bgcolor: "#ffffff",
     plot_bgcolor: "#ffffff",
     legend: { orientation: "h", y: 1.12, x: 0 },
-    xaxis: {
-      title: xLabel,
-      range: xRange,
-      tickmode: "array",
-      tickvals: xTicks.values,
-      ticktext: xTicks.labels,
-      gridcolor: "#eef2f7",
-      zeroline: false,
-    },
-    yaxis: {
-      title: yLabel,
-      range: yRange,
-      gridcolor: "#eef2f7",
-      zeroline: false,
-    },
+    xaxis,
+    yaxis,
   };
 }
 
@@ -992,31 +1016,32 @@ function renderCharts(output) {
     throw new Error("Plotly failed to load. Check internet/CDN access.");
   }
 
-  const cumulativeDays = output.series.cumulativeDays;
+  const time = output.series.time;
+  const delay = output.series.delay;
+  const reference = output.series.reference;
+
+  const cumulativeDays = time.days;
+  const timeRange = [cumulativeDays[0], cumulativeDays[cumulativeDays.length - 1]];
   const cumulativeTicks = buildTimeStakeTicks(
-    Math.min(...cumulativeDays),
-    Math.max(...cumulativeDays),
+    timeRange[0],
+    timeRange[1],
     output.meta.slotSeconds,
     output.meta.epochSlots,
     output.meta.maxNewSequencersPerEpoch,
     output.meta.usdPerSeq
   );
-  const cumulativeHover = cumulativeDays.map((day, idx) => {
-    const usd = Math.round(output.series.cumulativeInvested[idx]).toLocaleString();
-    const seq = output.series.cumulativeUserSeq[idx].toLocaleString();
-    return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
-  });
+  const cumulativeHover = buildTimeHover(time.days, time.invested, time.userSeq);
   const cumulativeLayout = baseLayout(
     "Elapsed days | invested stake in USD [user sequencers]",
     "Cumulative inclusion probability",
-    [Math.min(...cumulativeDays), Math.max(...cumulativeDays)],
+    timeRange,
     [0, 1],
     cumulativeTicks
   );
   const cumulativeData = [
     {
       x: cumulativeDays,
-      y: output.series.cumulativeComEhProbs,
+      y: time.cumulative.comEh,
       mode: "lines",
       name: "Committee + EH",
       text: cumulativeHover,
@@ -1026,7 +1051,7 @@ function renderCharts(output) {
     },
     {
       x: cumulativeDays,
-      y: output.series.cumulativeComProbs,
+      y: time.cumulative.com,
       mode: "lines",
       name: "Committee",
       text: cumulativeHover,
@@ -1036,7 +1061,7 @@ function renderCharts(output) {
     },
     {
       x: cumulativeDays,
-      y: output.series.cumulativeNonProbs,
+      y: time.cumulative.non,
       mode: "lines",
       name: "Non-committee",
       text: cumulativeHover,
@@ -1049,27 +1074,23 @@ function renderCharts(output) {
   const perSlotLayout = baseLayout(
     "Elapsed days | invested stake in USD [user sequencers]",
     "Effective per-slot inclusion probability",
-    [Math.min(...output.series.perSlotDays), Math.max(...output.series.perSlotDays)],
+    timeRange,
     [0, 1],
     buildTimeStakeTicks(
-      Math.min(...output.series.perSlotDays),
-      Math.max(...output.series.perSlotDays),
+      timeRange[0],
+      timeRange[1],
       output.meta.slotSeconds,
       output.meta.epochSlots,
       output.meta.maxNewSequencersPerEpoch,
       output.meta.usdPerSeq
     )
   );
-  const perSlotHover = output.series.perSlotDays.map((day, idx) => {
-    const usd = Math.round(output.series.perSlotInvested[idx]).toLocaleString();
-    const seq = output.series.perSlotUserSeq[idx].toLocaleString();
-    return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
-  });
+  const perSlotHover = cumulativeHover;
 
   const perSlotData = [
     {
-      x: output.series.perSlotDays,
-      y: output.series.perSlotComEhEffPerSlot,
+      x: time.days,
+      y: time.perSlot.comEh,
       mode: "lines",
       name: "Committee + EH",
       text: perSlotHover,
@@ -1078,8 +1099,8 @@ function renderCharts(output) {
       connectgaps: false,
     },
     {
-      x: output.series.perSlotDays,
-      y: output.series.perSlotComEffPerSlot,
+      x: time.days,
+      y: time.perSlot.com,
       mode: "lines",
       name: "Committee",
       text: perSlotHover,
@@ -1088,8 +1109,8 @@ function renderCharts(output) {
       connectgaps: false,
     },
     {
-      x: output.series.perSlotDays,
-      y: output.series.perSlotNonEffPerSlot,
+      x: time.days,
+      y: time.perSlot.non,
       mode: "lines",
       name: "Non-committee",
       text: perSlotHover,
@@ -1099,7 +1120,7 @@ function renderCharts(output) {
     },
   ];
 
-  const invested = output.series.invested;
+  const invested = delay.invested;
 
   const delayXTicks = buildUsdSeqTimeTicks(
     output.meta.delayXMin,
@@ -1112,7 +1133,7 @@ function renderCharts(output) {
   const delayYMin = output.meta.delayYMin;
   const delayYMax = output.meta.delayYMax;
   const delayHover = invested.map((usd, idx) => {
-    const seq = output.series.userSeq[idx];
+    const seq = delay.userSeq[idx];
     const days = daysToReachUserSeq(
       seq,
       output.meta.slotSeconds,
@@ -1133,7 +1154,7 @@ function renderCharts(output) {
   const delayData = [
     {
       x: invested,
-      y: toVisibleY(output.series.comDelay, delayYMin, delayYMax),
+      y: toVisibleY(delay.comHours, delayYMin, delayYMax),
       mode: "lines",
       name: "Committee",
       text: delayHover,
@@ -1143,7 +1164,7 @@ function renderCharts(output) {
     },
     {
       x: invested,
-      y: toVisibleY(output.series.nonDelay, delayYMin, delayYMax),
+      y: toVisibleY(delay.nonHours, delayYMin, delayYMax),
       mode: "lines",
       name: "Non-committee",
       text: delayHover,
@@ -1164,28 +1185,27 @@ function renderCharts(output) {
     undefined,
     referenceXTicks
   );
-  delete referenceLayout.yaxis.range;
   referenceLayout.yaxis.type = "log";
   const referenceData = [
     {
-      x: output.series.reference.fractions,
-      y: output.series.reference.delayDays,
+      x: reference.fractions,
+      y: reference.delayDays,
       mode: "lines",
       name: "Reference committee baseline",
-      text: output.series.reference.hover,
+      text: reference.hover,
       hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Reference committee baseline</extra>",
       line: { color: REFERENCE_BASELINE_COLOR, width: 2.5 },
       connectgaps: false,
     },
   ];
 
-  if (output.series.reference.current) {
+  if (reference.current) {
     referenceData.push({
-      x: [output.series.reference.current.fraction],
-      y: [output.series.reference.current.delayDays],
+      x: [reference.current.fraction],
+      y: [reference.current.delayDays],
       mode: "markers",
       name: "Current config",
-      text: [output.series.reference.current.hover],
+      text: [reference.current.hover],
       hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config</extra>",
       marker: {
         color: REFERENCE_MARKER_COLOR,
@@ -1273,37 +1293,10 @@ function runFromForm() {
 
     const output = runSimulation(cfg);
     renderCharts(output);
-
-    const label = targetLabel(cfg.target_inclusion_percent);
-    targetCommitteeValueEl.textContent = targetCardText(output.meta.targetCommitteeDays, cfg.max_horizon_days);
-    targetCommitteeEhValueEl.textContent = targetCardText(output.meta.targetCommitteeEhDays, cfg.max_horizon_days);
-    targetNonValueEl.textContent = targetCardText(output.meta.targetNonCommitteeDays, cfg.max_horizon_days);
-    targetCommitteeCostEl.textContent = targetCostText(
-      output.meta.targetCommitteeStakeUsd,
-      output.meta.targetCommitteeStakeToken,
-      label
-    );
-    targetCommitteeEhCostEl.textContent = targetCommitteeEhText(
-      output.meta.targetCommitteeEhStakeUsd,
-      output.meta.targetCommitteeEhStakeToken,
-      output.meta.escapeHatchBondUsd,
-      output.meta.escapeHatchWithdrawalTaxUsd,
-      label
-    );
-    targetNonCostEl.textContent = targetCostText(
-      output.meta.targetNonCommitteeStakeUsd,
-      output.meta.targetNonCommitteeStakeToken,
-      label
-    );
+    renderTargetCards(output.meta, cfg.max_horizon_days, targetLabel(cfg.target_inclusion_percent));
     setStatus("Simulation complete.");
   } catch (error) {
-    const label = targetLabel(cfg.target_inclusion_percent);
-    targetCommitteeValueEl.textContent = "-";
-    targetCommitteeEhValueEl.textContent = "-";
-    targetNonValueEl.textContent = "-";
-    targetCommitteeCostEl.textContent = `Cost @${label}: -`;
-    targetCommitteeEhCostEl.textContent = `stake @${label}: -`;
-    targetNonCostEl.textContent = `Cost @${label}: -`;
+    clearTargetCards(targetLabel(cfg.target_inclusion_percent));
     setStatus(`Error: ${error.message}`, true);
   }
 }
