@@ -73,12 +73,6 @@ header p {
   opacity: 0.95;
 }
 
-.t90-help {
-  margin: 8px 2px 0;
-  font-size: 12px;
-  color: #4b5563;
-}
-
 .panel {
   background: #fff;
   border: 1px solid #dfe4ea;
@@ -133,12 +127,6 @@ header p {
   padding: 12px 14px 14px;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-}
-
 label {
   font-size: 13px;
   color: #303945;
@@ -156,6 +144,7 @@ input {
 }
 
 .config-grid {
+  display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
