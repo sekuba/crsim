@@ -12,7 +12,7 @@ body {
 .page {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 24px 16px 48px;
+  padding: 24px 16px 180px;
 }
 
 header h1 {
@@ -219,6 +219,35 @@ button:hover {
   color: #667382;
 }
 
+.trust-badge {
+  position: fixed;
+  right: clamp(12px, 2vw, 24px);
+  bottom: clamp(12px, 2vw, 24px);
+  width: clamp(96px, 12vw, 168px);
+  z-index: 20;
+  display: block;
+  filter: drop-shadow(0 18px 24px rgba(107, 79, 27, 0.22));
+  animation: trust-badge-hover 4.8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.trust-badge img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@keyframes trust-badge-hover {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-7deg);
+  }
+
+  50% {
+    transform: translateY(-10px) rotate(-4deg);
+  }
+}
+
 @media (max-width: 860px) {
   .t90-strip {
     grid-template-columns: 1fr;
@@ -258,9 +287,19 @@ button:hover {
     min-height: 420px;
   }
 
+  .page {
+    padding-bottom: 136px;
+  }
+
   .chart-wrap .plotly,
   .chart-wrap .js-plotly-plot,
   .chart-wrap .plot-container {
     height: 420px !important;
+  }
+
+  .trust-badge {
+    width: clamp(80px, 24vw, 120px);
+    right: 10px;
+    bottom: 10px;
   }
 }
