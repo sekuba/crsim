@@ -15,6 +15,7 @@ under either a static sequencer set or configurable user-operated sequencer grow
 - Non-committee mode: slot proposer is drawn from all active sequencers.
 - Committee mode: committee of size `committee_size` is sampled per epoch from a validator set lagged by `validator_set_lag_epochs`, and reused for that epoch's slots.
 - Committee gate: inclusion is allowed only when committee censors `<= floor((committee_size - 1) / 3)`.
+- Exact hybrid timing: within a non-blocking committee, inclusion opportunities arrive at slot resolution; within a blocking committee, the whole epoch is censored. The app therefore tracks cumulative inclusion at every slot while keeping committee composition fixed for each epoch.
 - Escape hatch fallback: assume the Alpha upgrade is active. The censored user/group already holds `1` bonded escape-hatch candidate slot before censorship begins, and `escape_hatch_other_candidates` models the other bonded slots. A hatch opens every `112` epochs for `2` epochs; if the user's slot is designated proposer for that hatch, they can bypass the committee during the open window.
 - Escape hatch bond: the user's `332,000,000` token bond stays active until the slot is selected or voluntarily exited, so the user does not pay the withdrawal tax before inclusion. The `1,660,000` token withdrawal tax is only paid on exit.
 - Other escape-hatch candidates: any other candidate selected for a hatch is removed from the active set. To keep the pool crowded after being selected, that candidate must later exit and rejoin, paying the withdrawal tax again. Under the model's one-user-slot assumption, the coalition's expected tax burn until the user is selected is `escape_hatch_other_candidates * withdrawal_tax`.
@@ -48,11 +49,11 @@ Validation:
 - `escape_hatch_other_candidates` must be in `[0, 8]`, based on the website assumption of `~3B` circulating AZTEC and at most one user/group slot.
 
 ## Outputs
-- Cumulative inclusion chart over elapsed days for the full `max_horizon_days`.
+- Cumulative inclusion chart over elapsed days for the full `max_horizon_days`, evaluated at slot resolution.
 - Effective per-slot inclusion chart: uses full `max_horizon_days`.
 - Expected inclusion delay chart: uses full `max_horizon_days`; y-axis shown only up to 720 hours (30 days). This chart excludes the escape hatch and remains a sequencer-stake-only view.
 - Reference committee baseline chart: static committee-only `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
-- Target cards show time to reach the configured cumulative inclusion probability for committee, committee + escape hatch, and non-committee modes.
+- Target cards show the first slot at which the configured cumulative inclusion probability is reached for committee, committee + escape hatch, and non-committee modes.
 
 ## UI Actions
 - `Run Simulation`: validate inputs, recompute data, rerender charts.
