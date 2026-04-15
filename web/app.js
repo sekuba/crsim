@@ -1,7 +1,6 @@
 "use strict";
 
 const EPSILON = 1e-15;
-const DELAY_Y_CAP_HOURS = 30 * 24;
 const COMMITTEE_COLOR = "#2563EB";
 const COMMITTEE_EH_COLOR = "#059669";
 const NON_COMMITTEE_COLOR = "#F97316";
@@ -60,7 +59,6 @@ const targetCommitteeEhCostEl = document.getElementById("target-committee-eh-cos
 const targetNonCostEl = document.getElementById("target-non-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
-const delayChartEl = document.getElementById("chart-delay");
 const referenceBaselineChartEl = document.getElementById("chart-reference-baseline");
 
 function setStatus(message, isError = false) {
@@ -218,14 +216,48 @@ function geometricSum(r, n) {
   return (1.0 - r ** n) / (1.0 - r);
 }
 
-function paddedBounds(values, relativePadding = 0.05, absolutePadding = 1.0) {
-  const lower = Math.min(...values);
-  const upper = Math.max(...values);
-  if (upper - lower > EPSILON) {
-    return [lower, upper];
+function logMultiplySurvival(logSurvival, factor) {
+  if (factor <= 0.0) {
+    return Number.NEGATIVE_INFINITY;
   }
-  const pad = Math.max(Math.abs(lower) * relativePadding, absolutePadding);
-  return [lower - pad, lower + pad];
+  if (!Number.isFinite(logSurvival) && logSurvival < 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  if (factor >= 1.0 - EPSILON) {
+    return logSurvival;
+  }
+  return logSurvival + Math.log(factor);
+}
+
+function committeePartialSurvivalFromDistribution(distribution, committeeSize, slotsInEpoch) {
+  const partialSurvival = new Array(slotsInEpoch + 1).fill(0.0);
+  partialSurvival[0] = 1.0;
+
+  if (!distribution.length) {
+    for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
+      partialSurvival[slot] = 1.0;
+    }
+    return partialSurvival;
+  }
+
+  const maxAllowed = maxCensorsAllowed(committeeSize);
+  for (const [committeeCensors, probability] of distribution) {
+    if (committeeCensors > maxAllowed) {
+      for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
+        partialSurvival[slot] += probability;
+      }
+      continue;
+    }
+
+    const miss = committeeCensors / committeeSize;
+    let missPower = 1.0;
+    for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
+      missPower *= miss;
+      partialSurvival[slot] += probability * missPower;
+    }
+  }
+
+  return partialSurvival;
 }
 
 function validateConfig(cfg) {
@@ -284,23 +316,6 @@ function validateConfig(cfg) {
 
 function maxHorizonSlots(cfg) {
   return Math.floor((cfg.max_horizon_days * 24 * 3600) / cfg.slot_seconds);
-}
-
-function maxHorizonUserSeqValues(cfg) {
-  const maxSeq =
-    Math.floor(maxHorizonSlots(cfg) / cfg.epoch_slots) * cfg.max_new_sequencers_per_epoch;
-  if (maxSeq <= 0) {
-    return [0];
-  }
-  const step = Math.max(1, Math.floor(maxSeq / 250));
-  const values = [];
-  for (let x = 0; x <= maxSeq; x += step) {
-    values.push(x);
-  }
-  if (values[values.length - 1] !== maxSeq) {
-    values.push(maxSeq);
-  }
-  return values;
 }
 
 class SimulationModel {
@@ -387,83 +402,52 @@ class SimulationModel {
     return dist;
   }
 
-  committeeEpochFactors(userSeq, maliciousSeq, slotsInEpoch) {
-    const k = this.cfg.committee_size;
-    const key = `${userSeq}|${maliciousSeq}|${slotsInEpoch}`;
+  committeePartialSurvival(userSeq, maliciousSeq, slotsInEpoch) {
+    const key = `partial|${userSeq}|${maliciousSeq}|${slotsInEpoch}`;
     if (this.cache.has(key)) {
       return this.cache.get(key);
     }
 
     const totalSeq = this.cfg.base_sequencers + userSeq + maliciousSeq;
     const censorSeq = this.initialCensors + maliciousSeq;
-    if (k > totalSeq) {
-      const fallback = [1.0, slotsInEpoch];
-      this.cache.set(key, fallback);
-      return fallback;
-    }
+    let partialSurvival;
 
-    const maxC = maxCensorsAllowed(k);
-    let fTotal = 0.0;
-    let gTotal = 0.0;
-    let mass = 0.0;
-
-    for (const [censorCommittee, p] of this.committeeDistribution(totalSeq, censorSeq, k)) {
-      mass += p;
-      const miss = censorCommittee / k;
-      let f = 1.0;
-      let g = slotsInEpoch;
-      if (censorCommittee <= maxC) {
-        f = miss ** slotsInEpoch;
-        g = geometricSum(miss, slotsInEpoch);
-      }
-      fTotal += p * f;
-      gTotal += p * g;
-    }
-
-    let result;
-    if (mass <= EPSILON) {
-      result = [1.0, slotsInEpoch];
+    if (this.cfg.committee_size > totalSeq) {
+      partialSurvival = new Array(slotsInEpoch + 1).fill(1.0);
+      partialSurvival[0] = 1.0;
     } else {
-      const invMass = 1.0 / mass;
-      result = [
-        fTotal * invMass,
-        gTotal * invMass,
-      ];
+      partialSurvival = committeePartialSurvivalFromDistribution(
+        this.committeeDistribution(totalSeq, censorSeq, this.cfg.committee_size),
+        this.cfg.committee_size,
+        slotsInEpoch
+      );
     }
 
-    this.cache.set(key, result);
-    return result;
+    this.cache.set(key, partialSurvival);
+    return partialSurvival;
   }
 }
 
-function epochFactors(model, activeUser, activeMalicious, slotsInEpoch, committeeMode) {
+function partialSurvivalCurve(model, activeUser, activeMalicious, slotsInEpoch, committeeMode) {
   if (committeeMode) {
-    const [f, g] = model.committeeEpochFactors(activeUser, activeMalicious, slotsInEpoch);
-    return [f, g];
+    return model.committeePartialSurvival(activeUser, activeMalicious, slotsInEpoch);
   }
-  const pNon = model.pNonCommitteeSlot(activeUser, activeMalicious);
-  const miss = 1.0 - pNon;
-  return [miss ** slotsInEpoch, geometricSum(miss, slotsInEpoch)];
+
+  const pSlot = model.pNonCommitteeSlot(activeUser, activeMalicious);
+  const miss = 1.0 - pSlot;
+  const partialSurvival = new Array(slotsInEpoch + 1).fill(1.0);
+  let missPower = 1.0;
+  for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
+    missPower *= miss;
+    partialSurvival[slot] = missPower;
+  }
+  return partialSurvival;
 }
 
 // Aztec committees sample from a validator set that is lagged by a fixed number of epochs.
 function scheduledUserSequencersForEpoch(cfg, epochIdx, lagEpochs = 0) {
   const effectiveEpochIdx = Math.max(0, epochIdx - lagEpochs);
   return effectiveEpochIdx * cfg.max_new_sequencers_per_epoch;
-}
-
-function activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs = 0) {
-  return Math.min(targetUserSeq, scheduledUserSequencersForEpoch(cfg, epochIdx, lagEpochs));
-}
-
-function epochsToSteadyState(cfg, targetUserSeq, lagEpochs = 0) {
-  if (targetUserSeq <= 0) {
-    return 0;
-  }
-  if (cfg.max_new_sequencers_per_epoch <= 0) {
-    return Number.POSITIVE_INFINITY;
-  }
-  return Math.ceil(targetUserSeq / cfg.max_new_sequencers_per_epoch) + lagEpochs;
 }
 
 function maliciousSequencersForHonest(cfg, honestUserSeq) {
@@ -497,16 +481,18 @@ function escapeHatchSurvivalProbability(cfg, elapsedSlots) {
   const cycleSlots = escapeHatchCycleSlots(cfg);
   const openSlots = escapeHatchOpenSlots(cfg);
   const miss = 1.0 - escapeHatchSelectionProbability(cfg);
-  let totalSurvival = 0.0;
+  const fullCycles = Math.floor(elapsedSlots / cycleSlots);
+  const residualSlots = elapsedSlots % cycleSlots;
+  const openExtra =
+    residualSlots <= 0 ? 0 : Math.max(0, openSlots + residualSlots - cycleSlots);
+  const openBase = openSlots - openExtra;
+  const nonOpenExtra = residualSlots - openExtra;
+  const nonOpenBase = (cycleSlots - openSlots) - nonOpenExtra;
 
-  // Assume censorship starts at a random point within the hatch cycle.
-  // If the current hatch is open and the user's bonded slot was selected, they can force inclusion immediately.
-  for (let phaseSlots = 0; phaseSlots < cycleSlots; phaseSlots += 1) {
-    const attempts =
-      (phaseSlots < openSlots ? 1 : 0)
-      + Math.floor((elapsedSlots + phaseSlots) / cycleSlots);
-    totalSurvival += miss ** attempts;
-  }
+  const totalSurvival =
+    (nonOpenBase * (miss ** fullCycles))
+    + ((openBase + nonOpenExtra) * (miss ** (fullCycles + 1)))
+    + (openExtra * (miss ** (fullCycles + 2)));
 
   return clampProbability(totalSurvival / cycleSlots);
 }
@@ -522,83 +508,12 @@ function horizonProbabilityFromLogSurvival(logSurvival) {
   return clampProbability(p);
 }
 
-function effectivePerSlotFromLogSurvival(logSurvival, slots) {
-  if (slots <= 0) {
-    return 0;
-  }
-  if (!Number.isFinite(logSurvival) && logSurvival < 0) {
-    return 1.0;
-  }
-  const p = -Math.expm1(logSurvival / slots);
-  if (Math.abs(p) < EPSILON) {
-    return 0.0;
-  }
-  return clampProbability(p);
-}
-
-function expectedDelayHoursWithChurn(cfg, model, targetUserSeq, committeeMode) {
-  const lagEpochs = committeeMode ? cfg.validator_set_lag_epochs : 0;
-  const epochsToFull = epochsToSteadyState(cfg, targetUserSeq, lagEpochs);
-  if (!Number.isFinite(epochsToFull)) {
-    return Number.POSITIVE_INFINITY;
-  }
-  let survival = 1.0;
-  let expectedSlots = 0.0;
-
-  for (let epochIdx = 0; epochIdx < epochsToFull; epochIdx += 1) {
-    const activeUser = activeUserForEpoch(cfg, targetUserSeq, epochIdx, lagEpochs);
-    const activeMalicious = maliciousSequencersForHonest(cfg, activeUser);
-    const [f, g] = epochFactors(
-      model,
-      activeUser,
-      activeMalicious,
-      cfg.epoch_slots,
-      committeeMode
-    );
-    expectedSlots += survival * g;
-    survival *= f;
-  }
-
-  const finalMalicious = maliciousSequencersForHonest(cfg, targetUserSeq);
-  const [fFinal, gFinal] = epochFactors(
-    model,
-    targetUserSeq,
-    finalMalicious,
-    cfg.epoch_slots,
-    committeeMode
-  );
-  if (fFinal >= 1.0 - EPSILON) {
-    return Number.POSITIVE_INFINITY;
-  }
-  expectedSlots += (survival * gFinal) / (1.0 - fFinal);
-  return expectedSlots * (cfg.slot_seconds / 3600.0);
-}
-
 function referenceCommitteeCurvePoint(cfg, model, censorCount) {
-  const partialSurvival = new Array(cfg.epoch_slots + 1).fill(0.0);
-  partialSurvival[0] = 1.0;
-  const committeeSize = cfg.committee_size;
-  const maxAllowed = maxCensorsAllowed(committeeSize);
-
-  for (const [committeeCensors, probability] of model.committeeDistribution(
-    cfg.base_sequencers,
-    censorCount,
-    committeeSize
-  )) {
-    if (committeeCensors > maxAllowed) {
-      for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
-        partialSurvival[slot] += probability;
-      }
-      continue;
-    }
-
-    const miss = committeeCensors / committeeSize;
-    let missPower = 1.0;
-    for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
-      missPower *= miss;
-      partialSurvival[slot] += probability * missPower;
-    }
-  }
+  const partialSurvival = committeePartialSurvivalFromDistribution(
+    model.committeeDistribution(cfg.base_sequencers, censorCount, cfg.committee_size),
+    cfg.committee_size,
+    cfg.epoch_slots
+  );
 
   const pEpochCensor = partialSurvival[cfg.epoch_slots];
   if (pEpochCensor >= 1.0 - EPSILON) {
@@ -707,6 +622,7 @@ function buildTimeSeries(cfg, model) {
   let logSurvivalNon = 0.0;
   let logSurvivalCom = 0.0;
   let elapsedSlots = 0;
+  let previousEhSurvival = 1.0;
 
   for (let epochIdx = 0; epochIdx < maxEpochs; epochIdx += 1) {
     const slotsInEpoch = Math.min(cfg.epoch_slots, maxSlots - elapsedSlots);
@@ -717,43 +633,56 @@ function buildTimeSeries(cfg, model) {
     const activeUserCom = scheduledUserSequencersForEpoch(cfg, epochIdx, cfg.validator_set_lag_epochs);
     const activeMaliciousNon = maliciousSequencersForHonest(cfg, activeUserNon);
     const activeMaliciousCom = maliciousSequencersForHonest(cfg, activeUserCom);
-    const [fNon] = epochFactors(model, activeUserNon, activeMaliciousNon, slotsInEpoch, false);
-    const [fCom] = epochFactors(model, activeUserCom, activeMaliciousCom, slotsInEpoch, true);
-
-    if (fNon <= 0.0) {
-      logSurvivalNon = Number.NEGATIVE_INFINITY;
-    } else if (Number.isFinite(logSurvivalNon)) {
-      logSurvivalNon += Math.log(fNon);
-    }
-
-    if (fCom <= 0.0) {
-      logSurvivalCom = Number.NEGATIVE_INFINITY;
-    } else if (Number.isFinite(logSurvivalCom)) {
-      logSurvivalCom += Math.log(fCom);
-    }
-
-    elapsedSlots += slotsInEpoch;
+    const partialNon = partialSurvivalCurve(
+      model,
+      activeUserNon,
+      activeMaliciousNon,
+      slotsInEpoch,
+      false
+    );
+    const partialCom = partialSurvivalCurve(
+      model,
+      activeUserCom,
+      activeMaliciousCom,
+      slotsInEpoch,
+      true
+    );
+    const epochStartLogSurvivalNon = logSurvivalNon;
+    const epochStartLogSurvivalCom = logSurvivalCom;
     const currentUserSeq = activeUserNon;
-    days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
-    invested.push(currentUserSeq * usdPerSeq);
-    userSeq.push(currentUserSeq);
+    const currentInvestedUsd = currentUserSeq * usdPerSeq;
 
-    const ehSurvival = escapeHatchSurvivalProbability(cfg, elapsedSlots);
-    const logSurvivalEh = ehSurvival <= 0.0 ? Number.NEGATIVE_INFINITY : Math.log(ehSurvival);
-    const logSurvivalComEh =
-      !Number.isFinite(logSurvivalCom) || !Number.isFinite(logSurvivalEh)
-        ? Number.NEGATIVE_INFINITY
-        : logSurvivalCom + logSurvivalEh;
+    for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
+      elapsedSlots += 1;
+      logSurvivalNon = logMultiplySurvival(epochStartLogSurvivalNon, partialNon[slot]);
+      logSurvivalCom = logMultiplySurvival(epochStartLogSurvivalCom, partialCom[slot]);
 
-    const pNon = horizonProbabilityFromLogSurvival(logSurvivalNon);
-    const pCom = horizonProbabilityFromLogSurvival(logSurvivalCom);
-    const pComEh = horizonProbabilityFromLogSurvival(logSurvivalComEh);
-    nonProbs.push(pNon);
-    comProbs.push(pCom);
-    comEhProbs.push(pComEh);
-    nonEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalNon, elapsedSlots));
-    comEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalCom, elapsedSlots));
-    comEhEffPerSlot.push(effectivePerSlotFromLogSurvival(logSurvivalComEh, elapsedSlots));
+      days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
+      invested.push(currentInvestedUsd);
+      userSeq.push(currentUserSeq);
+
+      const ehSurvival = escapeHatchSurvivalProbability(cfg, elapsedSlots);
+      const logSurvivalEh = ehSurvival <= 0.0 ? Number.NEGATIVE_INFINITY : Math.log(ehSurvival);
+      const logSurvivalComEh =
+        !Number.isFinite(logSurvivalCom) || !Number.isFinite(logSurvivalEh)
+          ? Number.NEGATIVE_INFINITY
+          : logSurvivalCom + logSurvivalEh;
+
+      const pNon = horizonProbabilityFromLogSurvival(logSurvivalNon);
+      const pCom = horizonProbabilityFromLogSurvival(logSurvivalCom);
+      const pComEh = horizonProbabilityFromLogSurvival(logSurvivalComEh);
+      nonProbs.push(pNon);
+      comProbs.push(pCom);
+      comEhProbs.push(pComEh);
+
+      const missNon = partialNon[slot] / partialNon[slot - 1];
+      const missCom = partialCom[slot] / partialCom[slot - 1];
+      const missEh = previousEhSurvival <= 0.0 ? 1.0 : ehSurvival / previousEhSurvival;
+      nonEffPerSlot.push(clampProbability(1.0 - missNon));
+      comEffPerSlot.push(clampProbability(1.0 - missCom));
+      comEhEffPerSlot.push(clampProbability(1.0 - (missCom * missEh)));
+      previousEhSurvival = ehSurvival;
+    }
   }
 
   return {
@@ -789,47 +718,7 @@ function targetResult(days, userSeq, probabilities, threshold, stakePerSequencer
 }
 
 function runSimulation(cfg) {
-  const usdPerSeq = cfg.stake_per_sequencer_token * cfg.token_usd;
   const model = new SimulationModel(cfg);
-  const invested = [];
-  const delayUserSeq = [];
-  const nonDelay = [];
-  const comDelay = [];
-  const finiteDelayValues = [];
-
-  // Sample the full horizon for the delay chart.
-  for (const honestSeq of maxHorizonUserSeqValues(cfg)) {
-    const investedUsd = honestSeq * usdPerSeq;
-    const expectedHoursNon = expectedDelayHoursWithChurn(cfg, model, honestSeq, false);
-    const expectedHoursCom = expectedDelayHoursWithChurn(cfg, model, honestSeq, true);
-
-    invested.push(investedUsd);
-    delayUserSeq.push(honestSeq);
-    nonDelay.push(expectedHoursNon);
-    comDelay.push(expectedHoursCom);
-
-    if (Number.isFinite(expectedHoursNon)) {
-      finiteDelayValues.push(expectedHoursNon);
-    }
-    if (Number.isFinite(expectedHoursCom)) {
-      finiteDelayValues.push(expectedHoursCom);
-    }
-  }
-
-  const visibleDelayValues = finiteDelayValues.filter((v) => v <= DELAY_Y_CAP_HOURS);
-  const [delayXMin, delayXMax] = paddedBounds(invested, 0.05, usdPerSeq);
-
-  let delayYMin = 0.0;
-  let delayYMax = DELAY_Y_CAP_HOURS;
-  if (visibleDelayValues.length) {
-    [delayYMin, delayYMax] = paddedBounds(visibleDelayValues, 0.05, cfg.slot_seconds / 3600.0);
-    delayYMax = Math.min(delayYMax, DELAY_Y_CAP_HOURS);
-    if (delayYMax <= delayYMin) {
-      delayYMin = 0.0;
-      delayYMax = DELAY_Y_CAP_HOURS;
-    }
-  }
-
   const timeSeries = buildTimeSeries(cfg, model);
   const reference = buildReferenceCommitteeCurve(cfg, model);
   const targetProbability = cfg.target_inclusion_percent / 100;
@@ -863,14 +752,10 @@ function runSimulation(cfg) {
   return {
     meta: {
       targetInclusionPercent: cfg.target_inclusion_percent,
-      usdPerSeq,
       slotSeconds: cfg.slot_seconds,
       epochSlots: cfg.epoch_slots,
       maxNewSequencersPerEpoch: cfg.max_new_sequencers_per_epoch,
-      delayXMin,
-      delayXMax,
-      delayYMin,
-      delayYMax,
+      usdPerSeq: cfg.stake_per_sequencer_token * cfg.token_usd,
       targetCommitteeDays: committeeTarget.days,
       targetCommitteeEhDays: committeeEhTarget.days,
       targetNonCommitteeDays: nonCommitteeTarget.days,
@@ -884,12 +769,6 @@ function runSimulation(cfg) {
       escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
     },
     series: {
-      delay: {
-        invested,
-        userSeq: delayUserSeq,
-        nonHours: nonDelay,
-        comHours: comDelay,
-      },
       time: timeSeries,
       reference,
     },
@@ -904,17 +783,6 @@ function formatDayTickLabel(days) {
     return days.toFixed(1);
   }
   return days.toFixed(2);
-}
-
-function daysToReachUserSeq(userSeq, slotSeconds, epochSlots, maxNewPerEpoch) {
-  if (userSeq <= 0) {
-    return 0.0;
-  }
-  if (maxNewPerEpoch <= 0) {
-    return Number.POSITIVE_INFINITY;
-  }
-  const epochs = Math.ceil(userSeq / maxNewPerEpoch);
-  return (epochs * epochSlots * slotSeconds) / (24 * 3600);
 }
 
 function activeUserFromElapsedSlots(slots, epochSlots, maxNewPerEpoch) {
@@ -940,36 +808,11 @@ function buildTimeStakeTicks(xMinDays, xMaxDays, slotSeconds, epochSlots, maxNew
   return { values, labels };
 }
 
-function buildUsdSeqTimeTicks(xMinUsd, xMaxUsd, slotSeconds, epochSlots, maxNewPerEpoch, usdPerSeq) {
-  const values = [];
-  const labels = [];
-  for (let i = 0; i <= 5; i += 1) {
-    const usdValue = xMinUsd + ((xMaxUsd - xMinUsd) * i) / 5;
-    values.push(usdValue);
-    const seq = Math.max(0, Math.round(usdValue / usdPerSeq));
-    const days = daysToReachUserSeq(seq, slotSeconds, epochSlots, maxNewPerEpoch);
-    labels.push(`$${Math.round(usdValue).toLocaleString()} [${seq}] | ${formatDayTickLabel(days)}d`);
-  }
-  return { values, labels };
-}
-
 function buildTimeHover(days, invested, userSeq) {
   return days.map((day, idx) => {
     const usd = Math.round(invested[idx]).toLocaleString();
     const seq = userSeq[idx].toLocaleString();
     return `Day ${day.toFixed(3)}<br>Invested: $${usd}<br>User sequencers: ${seq}`;
-  });
-}
-
-function toVisibleY(values, yMin, yMax) {
-  return values.map((v) => {
-    if (!Number.isFinite(v)) {
-      return null;
-    }
-    if (v < yMin || v > yMax) {
-      return null;
-    }
-    return v;
   });
 }
 
@@ -1017,7 +860,6 @@ function renderCharts(output) {
   }
 
   const time = output.series.time;
-  const delay = output.series.delay;
   const reference = output.series.reference;
 
   const cumulativeDays = time.days;
@@ -1073,7 +915,7 @@ function renderCharts(output) {
 
   const perSlotLayout = baseLayout(
     "Elapsed days | invested stake in USD [user sequencers]",
-    "Effective per-slot inclusion probability",
+    "Current-slot inclusion probability while still waiting",
     timeRange,
     [0, 1],
     buildTimeStakeTicks(
@@ -1094,7 +936,7 @@ function renderCharts(output) {
       mode: "lines",
       name: "Committee + EH",
       text: perSlotHover,
-      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Committee + EH</extra>",
+      hovertemplate: "%{text}<br>Current-slot inclusion: %{y:.6f}<extra>Committee + EH</extra>",
       line: { color: COMMITTEE_EH_COLOR, width: 2 },
       connectgaps: false,
     },
@@ -1104,7 +946,7 @@ function renderCharts(output) {
       mode: "lines",
       name: "Committee",
       text: perSlotHover,
-      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Committee</extra>",
+      hovertemplate: "%{text}<br>Current-slot inclusion: %{y:.6f}<extra>Committee</extra>",
       line: { color: COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
@@ -1114,61 +956,7 @@ function renderCharts(output) {
       mode: "lines",
       name: "Non-committee",
       text: perSlotHover,
-      hovertemplate: "%{text}<br>Effective per-slot: %{y:.6f}<extra>Non-committee</extra>",
-      line: { color: NON_COMMITTEE_COLOR, width: 2 },
-      connectgaps: false,
-    },
-  ];
-
-  const invested = delay.invested;
-
-  const delayXTicks = buildUsdSeqTimeTicks(
-    output.meta.delayXMin,
-    output.meta.delayXMax,
-    output.meta.slotSeconds,
-    output.meta.epochSlots,
-    output.meta.maxNewSequencersPerEpoch,
-    output.meta.usdPerSeq
-  );
-  const delayYMin = output.meta.delayYMin;
-  const delayYMax = output.meta.delayYMax;
-  const delayHover = invested.map((usd, idx) => {
-    const seq = delay.userSeq[idx];
-    const days = daysToReachUserSeq(
-      seq,
-      output.meta.slotSeconds,
-      output.meta.epochSlots,
-      output.meta.maxNewSequencersPerEpoch
-    );
-    return `Day ${days.toFixed(3)}<br>Invested: $${Math.round(usd).toLocaleString()}<br>User sequencers: ${seq.toLocaleString()}`;
-  });
-
-  const delayLayout = baseLayout(
-    "Invested stake in USD [user sequencers]",
-    "Expected time to inclusion (hours)",
-    [output.meta.delayXMin, output.meta.delayXMax],
-    [delayYMin, delayYMax],
-    delayXTicks
-  );
-
-  const delayData = [
-    {
-      x: invested,
-      y: toVisibleY(delay.comHours, delayYMin, delayYMax),
-      mode: "lines",
-      name: "Committee",
-      text: delayHover,
-      hovertemplate: "%{text}<br>Expected delay: %{y:.6f}h<extra>Committee</extra>",
-      line: { color: COMMITTEE_COLOR, width: 2 },
-      connectgaps: false,
-    },
-    {
-      x: invested,
-      y: toVisibleY(delay.nonHours, delayYMin, delayYMax),
-      mode: "lines",
-      name: "Non-committee",
-      text: delayHover,
-      hovertemplate: "%{text}<br>Expected delay: %{y:.6f}h<extra>Non-committee</extra>",
+      hovertemplate: "%{text}<br>Current-slot inclusion: %{y:.6f}<extra>Non-committee</extra>",
       line: { color: NON_COMMITTEE_COLOR, width: 2 },
       connectgaps: false,
     },
@@ -1217,7 +1005,6 @@ function renderCharts(output) {
 
   Plotly.react(cumulativeChartEl, cumulativeData, cumulativeLayout, plotConfig());
   Plotly.react(perSlotChartEl, perSlotData, perSlotLayout, plotConfig());
-  Plotly.react(delayChartEl, delayData, delayLayout, plotConfig());
   Plotly.react(referenceBaselineChartEl, referenceData, referenceLayout, plotConfig());
 }
 

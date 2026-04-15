@@ -106,18 +106,14 @@
     </section>
 
     <section class="panel">
-      <h2>Per-slot Inclusion</h2>
+      <h2>Current-slot Inclusion</h2>
+      <p class="note">Probability of inclusion in the current slot conditional on the 'still waiting' scenario. This means that inclusion probability is not memoryless and is highest at the start of a given epoch. It decreases within the epoch because of the evidence that inclusion has still not happened and the entire epoch having a censoring quorum becomes more likely.</p>
       <div id="chart-per-slot" class="chart-wrap"></div>
     </section>
 
     <section class="panel">
-      <h2>Inclusion Delay</h2>
-      <div id="chart-delay" class="chart-wrap"></div>
-    </section>
-
-    <section class="panel">
       <h2>Static Sequencer Set Censorship Fraction vs. Inclusion delay</h2>
-      <p class="note">Committee-only T99 delay vs. censorship fraction over the fixed base sequencer set. This baseline ignores sequencer growth and the escape hatch; the current censor fraction is marked if finite.</p>
+      <p class="note">Committee-only T99 inclusion vs. censorship fraction over the fixed base sequencer set. This baseline ignores sequencer growth and the escape hatch; the current censor fraction is marked red.</p>
       <div id="chart-reference-baseline" class="chart-wrap"></div>
     </section>
   </main>
