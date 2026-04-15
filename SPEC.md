@@ -50,8 +50,7 @@ Validation:
 
 ## Outputs
 - Cumulative inclusion chart over elapsed days for the full `max_horizon_days`, evaluated at slot resolution.
-- Effective per-slot inclusion chart: uses full `max_horizon_days`.
-- Expected inclusion delay chart: uses full `max_horizon_days`; y-axis shown only up to 720 hours (30 days). This chart excludes the escape hatch and remains a sequencer-stake-only view.
+- Current-slot inclusion chart: uses full `max_horizon_days` and shows the probability of inclusion in the current slot conditional on the user still waiting. Committee paths can sawtooth because late-slot survival within an epoch updates the posterior toward a blocking committee, then resets when a new committee is sampled.
 - Reference committee baseline chart: static committee-only `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
 - Target cards show the first slot at which the configured cumulative inclusion probability is reached for committee, committee + escape hatch, and non-committee modes.
 
