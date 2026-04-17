@@ -3,8 +3,7 @@
 const EPSILON = 1e-15;
 const COMMITTEE_COLOR = "#2563EB";
 const COMMITTEE_EH_COLOR = "#059669";
-const NON_COMMITTEE_COLOR = "#F97316";
-const REFERENCE_BASELINE_COLOR = "#0F172A";
+const ETHEREUM_COLOR = "#F97316";
 const REFERENCE_MARKER_COLOR = "#DC2626";
 
 const EH_BOND_TOKENS = 332000000;
@@ -33,6 +32,15 @@ const DEFAULT_CONFIG = {
   escape_hatch_other_candidates: 1,
 };
 
+// Single-proposer inclusion models can swap this slot-probability rule without touching chart code.
+const ETHEREUM_INCLUSION_MODEL = Object.freeze({
+  id: "ethereum",
+  label: "Ethereum",
+  slotProbability(simulationModel, userSeq, maliciousSeq = 0) {
+    return simulationModel.pEthereumCanonicalSlot(userSeq, maliciousSeq);
+  },
+});
+
 const INTEGER_FIELDS = new Set([
   "base_sequencers",
   "stake_per_sequencer_token",
@@ -50,13 +58,13 @@ const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
 const targetCommitteeLabelEl = document.getElementById("target-committee-label");
 const targetCommitteeEhLabelEl = document.getElementById("target-committee-eh-label");
-const targetNonLabelEl = document.getElementById("target-non-label");
+const targetEthereumLabelEl = document.getElementById("target-ethereum-label");
 const targetCommitteeValueEl = document.getElementById("target-committee-value");
 const targetCommitteeEhValueEl = document.getElementById("target-committee-eh-value");
-const targetNonValueEl = document.getElementById("target-non-value");
+const targetEthereumValueEl = document.getElementById("target-ethereum-value");
 const targetCommitteeCostEl = document.getElementById("target-committee-cost");
 const targetCommitteeEhCostEl = document.getElementById("target-committee-eh-cost");
-const targetNonCostEl = document.getElementById("target-non-cost");
+const targetEthereumCostEl = document.getElementById("target-ethereum-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const referenceBaselineChartEl = document.getElementById("chart-reference-baseline");
@@ -78,7 +86,7 @@ function syncTargetLabels(cfg) {
   const label = targetLabel(cfg.target_inclusion_percent);
   targetCommitteeLabelEl.textContent = `Committee ${label}`;
   targetCommitteeEhLabelEl.textContent = `Committee + EH ${label}`;
-  targetNonLabelEl.textContent = `Non-committee ${label}`;
+  targetEthereumLabelEl.textContent = `${ETHEREUM_INCLUSION_MODEL.label} ${label}`;
 }
 
 function formatHumanDurationDays(days) {
@@ -131,7 +139,7 @@ function targetCommitteeEhText(stakeUsd, stakeToken, ehBondUsd, ehTaxUsd, label)
 function renderTargetCards(meta, maxHorizonDays, label) {
   targetCommitteeValueEl.textContent = targetCardText(meta.targetCommitteeDays, maxHorizonDays);
   targetCommitteeEhValueEl.textContent = targetCardText(meta.targetCommitteeEhDays, maxHorizonDays);
-  targetNonValueEl.textContent = targetCardText(meta.targetNonCommitteeDays, maxHorizonDays);
+  targetEthereumValueEl.textContent = targetCardText(meta.targetEthereumDays, maxHorizonDays);
   targetCommitteeCostEl.textContent = targetCostText(
     meta.targetCommitteeStakeUsd,
     meta.targetCommitteeStakeToken,
@@ -144,9 +152,9 @@ function renderTargetCards(meta, maxHorizonDays, label) {
     meta.escapeHatchWithdrawalTaxUsd,
     label
   );
-  targetNonCostEl.textContent = targetCostText(
-    meta.targetNonCommitteeStakeUsd,
-    meta.targetNonCommitteeStakeToken,
+  targetEthereumCostEl.textContent = targetCostText(
+    meta.targetEthereumStakeUsd,
+    meta.targetEthereumStakeToken,
     label
   );
 }
@@ -154,10 +162,10 @@ function renderTargetCards(meta, maxHorizonDays, label) {
 function clearTargetCards(label) {
   targetCommitteeValueEl.textContent = "-";
   targetCommitteeEhValueEl.textContent = "-";
-  targetNonValueEl.textContent = "-";
+  targetEthereumValueEl.textContent = "-";
   targetCommitteeCostEl.textContent = `Cost @${label}: -`;
   targetCommitteeEhCostEl.textContent = `stake @${label}: -`;
-  targetNonCostEl.textContent = `Cost @${label}: -`;
+  targetEthereumCostEl.textContent = `Cost @${label}: -`;
 }
 
 function clampProbability(value) {
@@ -327,12 +335,14 @@ class SimulationModel {
     this.cache = new Map();
   }
 
-  pNonCommitteeSlot(userSeq, maliciousSeq = 0) {
-    const totalSeq = this.cfg.base_sequencers + userSeq + maliciousSeq;
-    if (totalSeq <= 0) {
-      return 0;
+  pEthereumCanonicalSlot(userSeq, maliciousSeq = 0) {
+    const honestSeq = this.initialHonest + userSeq;
+    const censorSeq = this.initialCensors + maliciousSeq;
+    const totalSeq = honestSeq + censorSeq;
+    if (totalSeq <= 0 || honestSeq <= censorSeq) {
+      return 0.0;
     }
-    return clampProbability((userSeq + this.initialHonest) / totalSeq);
+    return clampProbability(honestSeq / totalSeq);
   }
 
   committeeDistribution(totalSeq, censorSeq, committeeSize) {
@@ -428,12 +438,7 @@ class SimulationModel {
   }
 }
 
-function partialSurvivalCurve(model, activeUser, activeMalicious, slotsInEpoch, committeeMode) {
-  if (committeeMode) {
-    return model.committeePartialSurvival(activeUser, activeMalicious, slotsInEpoch);
-  }
-
-  const pSlot = model.pNonCommitteeSlot(activeUser, activeMalicious);
+function geometricPartialSurvivalFromSlotProbability(pSlot, slotsInEpoch) {
   const miss = 1.0 - pSlot;
   const partialSurvival = new Array(slotsInEpoch + 1).fill(1.0);
   let missPower = 1.0;
@@ -442,6 +447,17 @@ function partialSurvivalCurve(model, activeUser, activeMalicious, slotsInEpoch, 
     partialSurvival[slot] = missPower;
   }
   return partialSurvival;
+}
+
+function singleProposerPartialSurvivalCurve(
+  model,
+  inclusionModel,
+  activeUser,
+  activeMalicious,
+  slotsInEpoch
+) {
+  const pSlot = inclusionModel.slotProbability(model, activeUser, activeMalicious);
+  return geometricPartialSurvivalFromSlotProbability(pSlot, slotsInEpoch);
 }
 
 // Aztec committees sample from a validator set that is lagged by a fixed number of epochs.
@@ -508,17 +524,12 @@ function horizonProbabilityFromLogSurvival(logSurvival) {
   return clampProbability(p);
 }
 
-function referenceCommitteeCurvePoint(cfg, model, censorCount) {
-  const partialSurvival = committeePartialSurvivalFromDistribution(
-    model.committeeDistribution(cfg.base_sequencers, censorCount, cfg.committee_size),
-    cfg.committee_size,
-    cfg.epoch_slots
-  );
-
-  const pEpochCensor = partialSurvival[cfg.epoch_slots];
-  if (pEpochCensor >= 1.0 - EPSILON) {
+function referenceTargetPointFromPartialSurvival(cfg, partialSurvival) {
+  const slotsPerCycle = partialSurvival.length - 1;
+  const pCycleCensor = partialSurvival[slotsPerCycle];
+  if (pCycleCensor >= 1.0 - EPSILON) {
     return {
-      pEpochCensor,
+      pCycleCensor,
       targetSlots: Number.POSITIVE_INFINITY,
       targetDays: Number.POSITIVE_INFINITY,
     };
@@ -526,81 +537,152 @@ function referenceCommitteeCurvePoint(cfg, model, censorCount) {
 
   const targetSurvival = 1.0 - (cfg.target_inclusion_percent / 100.0);
   const logTargetSurvival = Math.log(targetSurvival);
-  let fullEpochsBeforeSearch = 0;
-  let logEpochSurvival = Number.NEGATIVE_INFINITY;
+  let fullCyclesBeforeSearch = 0;
+  let logCycleSurvival = Number.NEGATIVE_INFINITY;
 
-  if (pEpochCensor > 0.0) {
-    logEpochSurvival = Math.log(pEpochCensor);
-    fullEpochsBeforeSearch = Math.max(0, Math.ceil(logTargetSurvival / logEpochSurvival) - 1);
+  if (pCycleCensor > 0.0) {
+    logCycleSurvival = Math.log(pCycleCensor);
+    fullCyclesBeforeSearch = Math.max(0, Math.ceil(logTargetSurvival / logCycleSurvival) - 1);
   }
 
   const logPrefixSurvival =
-    fullEpochsBeforeSearch === 0 ? 0.0 : fullEpochsBeforeSearch * logEpochSurvival;
+    fullCyclesBeforeSearch === 0 ? 0.0 : fullCyclesBeforeSearch * logCycleSurvival;
 
-  for (let slot = 1; slot <= cfg.epoch_slots; slot += 1) {
+  for (let slot = 1; slot <= slotsPerCycle; slot += 1) {
     const partial = partialSurvival[slot];
     const logCandidateSurvival =
       partial <= 0.0 ? Number.NEGATIVE_INFINITY : logPrefixSurvival + Math.log(partial);
 
     if (logCandidateSurvival <= logTargetSurvival + 1e-12) {
-      const targetSlots = (fullEpochsBeforeSearch * cfg.epoch_slots) + slot;
+      const targetSlots = (fullCyclesBeforeSearch * slotsPerCycle) + slot;
       return {
-        pEpochCensor,
+        pCycleCensor,
         targetSlots,
         targetDays: targetSlots * cfg.slot_seconds / (24 * 3600),
       };
     }
   }
 
-  const targetSlots = (fullEpochsBeforeSearch + 1) * cfg.epoch_slots;
+  const targetSlots = (fullCyclesBeforeSearch + 1) * slotsPerCycle;
   return {
-    pEpochCensor,
+    pCycleCensor,
     targetSlots,
     targetDays: targetSlots * cfg.slot_seconds / (24 * 3600),
   };
 }
 
-function referenceHoverText(totalSeq, censorCount, pEpochCensor, label = "") {
+function referenceCommitteeCurvePoint(cfg, model, censorCount) {
+  const partialSurvival = committeePartialSurvivalFromDistribution(
+    model.committeeDistribution(cfg.base_sequencers, censorCount, cfg.committee_size),
+    cfg.committee_size,
+    cfg.epoch_slots
+  );
+  const point = referenceTargetPointFromPartialSurvival(cfg, partialSurvival);
+  return {
+    ...point,
+    inclusionProbability: 1.0 - point.pCycleCensor,
+  };
+}
+
+function referenceEthereumCurvePoint(cfg, censorCount) {
+  const totalSeq = cfg.base_sequencers;
+  const honestSeq = Math.max(0, totalSeq - censorCount);
+  const pSlot =
+    totalSeq <= 0 || honestSeq <= censorCount ? 0.0 : clampProbability(honestSeq / totalSeq);
+  const partialSurvival = geometricPartialSurvivalFromSlotProbability(pSlot, cfg.epoch_slots);
+  const point = referenceTargetPointFromPartialSurvival(cfg, partialSurvival);
+  return {
+    ...point,
+    inclusionProbability: pSlot,
+  };
+}
+
+function referenceHoverText(totalSeq, censorCount, inclusionProbability, probabilityLabel, label = "") {
   const prefix = label ? `${label}<br>` : "";
   return `${prefix}Censoring fraction: ${((100 * censorCount) / totalSeq).toFixed(2)}%`
     + `<br>Censoring sequencers: ${censorCount.toLocaleString()} / ${totalSeq.toLocaleString()}`
-    + `<br>Epoch inclusion probability: ${(1.0 - pEpochCensor).toFixed(12)}`;
+    + `<br>${probabilityLabel}: ${inclusionProbability.toFixed(12)}`;
 }
 
-function buildReferenceCommitteeCurve(cfg, model) {
+function currentReferencePoint(totalSeq, censorCount, point, probabilityLabel, label) {
+  if (!Number.isFinite(point.targetDays)) {
+    return null;
+  }
+  return {
+    fraction: censorCount / totalSeq,
+    delayDays: point.targetDays,
+    hover: referenceHoverText(
+      totalSeq,
+      censorCount,
+      point.inclusionProbability,
+      probabilityLabel,
+      label
+    ),
+  };
+}
+
+function buildReferenceCurves(cfg, model) {
   const fractions = [];
-  const delayDays = [];
-  const hover = [];
+  const committeeDelayDays = [];
+  const committeeHover = [];
+  const ethereumDelayDays = [];
+  const ethereumHover = [];
 
   for (let censorCount = 0; censorCount <= cfg.base_sequencers; censorCount += 1) {
-    const point = referenceCommitteeCurvePoint(cfg, model, censorCount);
+    const committeePoint = referenceCommitteeCurvePoint(cfg, model, censorCount);
+    const ethereumPoint = referenceEthereumCurvePoint(cfg, censorCount);
     fractions.push(censorCount / cfg.base_sequencers);
-    delayDays.push(Number.isFinite(point.targetDays) ? point.targetDays : null);
-    hover.push(referenceHoverText(cfg.base_sequencers, censorCount, point.pEpochCensor));
+    committeeDelayDays.push(Number.isFinite(committeePoint.targetDays) ? committeePoint.targetDays : null);
+    committeeHover.push(
+      referenceHoverText(
+        cfg.base_sequencers,
+        censorCount,
+        committeePoint.inclusionProbability,
+        "Epoch inclusion probability"
+      )
+    );
+    ethereumDelayDays.push(Number.isFinite(ethereumPoint.targetDays) ? ethereumPoint.targetDays : null);
+    ethereumHover.push(
+      referenceHoverText(
+        cfg.base_sequencers,
+        censorCount,
+        ethereumPoint.inclusionProbability,
+        "Slot inclusion probability"
+      )
+    );
   }
 
   const currentCensorCount = Math.min(
     cfg.base_sequencers,
     Math.max(0, Math.round(cfg.base_sequencers * cfg.censor_fraction))
   );
-  const currentPoint = referenceCommitteeCurvePoint(cfg, model, currentCensorCount);
+  const currentCommitteePoint = referenceCommitteeCurvePoint(cfg, model, currentCensorCount);
+  const currentEthereumPoint = referenceEthereumCurvePoint(cfg, currentCensorCount);
 
   return {
     fractions,
-    delayDays,
-    hover,
-    current: Number.isFinite(currentPoint.targetDays)
-      ? {
-          fraction: currentCensorCount / cfg.base_sequencers,
-          delayDays: currentPoint.targetDays,
-          hover: referenceHoverText(
-            cfg.base_sequencers,
-            currentCensorCount,
-            currentPoint.pEpochCensor,
-            "Current config"
-          ),
-        }
-      : null,
+    committee: {
+      delayDays: committeeDelayDays,
+      hover: committeeHover,
+      current: currentReferencePoint(
+        cfg.base_sequencers,
+        currentCensorCount,
+        currentCommitteePoint,
+        "Epoch inclusion probability",
+        "Current config (Committee)"
+      ),
+    },
+    ethereum: {
+      delayDays: ethereumDelayDays,
+      hover: ethereumHover,
+      current: currentReferencePoint(
+        cfg.base_sequencers,
+        currentCensorCount,
+        currentEthereumPoint,
+        "Slot inclusion probability",
+        "Current config (Ethereum)"
+      ),
+    },
   };
 }
 
@@ -612,14 +694,14 @@ function buildTimeSeries(cfg, model) {
   const days = [0.0];
   const invested = [0.0];
   const userSeq = [0];
-  const nonProbs = [0.0];
+  const ethereumProbs = [0.0];
   const comProbs = [0.0];
   const comEhProbs = [0.0];
-  const nonEffPerSlot = [0.0];
+  const ethereumEffPerSlot = [0.0];
   const comEffPerSlot = [0.0];
   const comEhEffPerSlot = [0.0];
 
-  let logSurvivalNon = 0.0;
+  let logSurvivalEthereum = 0.0;
   let logSurvivalCom = 0.0;
   let elapsedSlots = 0;
   let previousEhSurvival = 1.0;
@@ -629,32 +711,29 @@ function buildTimeSeries(cfg, model) {
     if (slotsInEpoch <= 0) {
       break;
     }
-    const activeUserNon = scheduledUserSequencersForEpoch(cfg, epochIdx);
+    const activeUserEthereum = scheduledUserSequencersForEpoch(cfg, epochIdx);
     const activeUserCom = scheduledUserSequencersForEpoch(cfg, epochIdx, cfg.validator_set_lag_epochs);
-    const activeMaliciousNon = maliciousSequencersForHonest(cfg, activeUserNon);
+    const activeMaliciousEthereum = maliciousSequencersForHonest(cfg, activeUserEthereum);
     const activeMaliciousCom = maliciousSequencersForHonest(cfg, activeUserCom);
-    const partialNon = partialSurvivalCurve(
+    const partialEthereum = singleProposerPartialSurvivalCurve(
       model,
-      activeUserNon,
-      activeMaliciousNon,
-      slotsInEpoch,
-      false
+      ETHEREUM_INCLUSION_MODEL,
+      activeUserEthereum,
+      activeMaliciousEthereum,
+      slotsInEpoch
     );
-    const partialCom = partialSurvivalCurve(
-      model,
-      activeUserCom,
-      activeMaliciousCom,
-      slotsInEpoch,
-      true
-    );
-    const epochStartLogSurvivalNon = logSurvivalNon;
+    const partialCom = model.committeePartialSurvival(activeUserCom, activeMaliciousCom, slotsInEpoch);
+    const epochStartLogSurvivalEthereum = logSurvivalEthereum;
     const epochStartLogSurvivalCom = logSurvivalCom;
-    const currentUserSeq = activeUserNon;
+    const currentUserSeq = activeUserEthereum;
     const currentInvestedUsd = currentUserSeq * usdPerSeq;
 
     for (let slot = 1; slot <= slotsInEpoch; slot += 1) {
       elapsedSlots += 1;
-      logSurvivalNon = logMultiplySurvival(epochStartLogSurvivalNon, partialNon[slot]);
+      logSurvivalEthereum = logMultiplySurvival(
+        epochStartLogSurvivalEthereum,
+        partialEthereum[slot]
+      );
       logSurvivalCom = logMultiplySurvival(epochStartLogSurvivalCom, partialCom[slot]);
 
       days.push((elapsedSlots * cfg.slot_seconds) / (24 * 3600));
@@ -668,17 +747,17 @@ function buildTimeSeries(cfg, model) {
           ? Number.NEGATIVE_INFINITY
           : logSurvivalCom + logSurvivalEh;
 
-      const pNon = horizonProbabilityFromLogSurvival(logSurvivalNon);
+      const pEthereum = horizonProbabilityFromLogSurvival(logSurvivalEthereum);
       const pCom = horizonProbabilityFromLogSurvival(logSurvivalCom);
       const pComEh = horizonProbabilityFromLogSurvival(logSurvivalComEh);
-      nonProbs.push(pNon);
+      ethereumProbs.push(pEthereum);
       comProbs.push(pCom);
       comEhProbs.push(pComEh);
 
-      const missNon = partialNon[slot] / partialNon[slot - 1];
+      const missEthereum = partialEthereum[slot] / partialEthereum[slot - 1];
       const missCom = partialCom[slot] / partialCom[slot - 1];
       const missEh = previousEhSurvival <= 0.0 ? 1.0 : ehSurvival / previousEhSurvival;
-      nonEffPerSlot.push(clampProbability(1.0 - missNon));
+      ethereumEffPerSlot.push(clampProbability(1.0 - missEthereum));
       comEffPerSlot.push(clampProbability(1.0 - missCom));
       comEhEffPerSlot.push(clampProbability(1.0 - (missCom * missEh)));
       previousEhSurvival = ehSurvival;
@@ -690,12 +769,12 @@ function buildTimeSeries(cfg, model) {
     invested,
     userSeq,
     cumulative: {
-      non: nonProbs,
+      ethereum: ethereumProbs,
       com: comProbs,
       comEh: comEhProbs,
     },
     perSlot: {
-      non: nonEffPerSlot,
+      ethereum: ethereumEffPerSlot,
       com: comEffPerSlot,
       comEh: comEhEffPerSlot,
     },
@@ -720,7 +799,7 @@ function targetResult(days, userSeq, probabilities, threshold, stakePerSequencer
 function runSimulation(cfg) {
   const model = new SimulationModel(cfg);
   const timeSeries = buildTimeSeries(cfg, model);
-  const reference = buildReferenceCommitteeCurve(cfg, model);
+  const reference = buildReferenceCurves(cfg, model);
   const targetProbability = cfg.target_inclusion_percent / 100;
   const committeeTarget = targetResult(
     timeSeries.days,
@@ -738,10 +817,10 @@ function runSimulation(cfg) {
     cfg.stake_per_sequencer_token,
     cfg.token_usd
   );
-  const nonCommitteeTarget = targetResult(
+  const ethereumTarget = targetResult(
     timeSeries.days,
     timeSeries.userSeq,
-    timeSeries.cumulative.non,
+    timeSeries.cumulative.ethereum,
     targetProbability,
     cfg.stake_per_sequencer_token,
     cfg.token_usd
@@ -758,13 +837,13 @@ function runSimulation(cfg) {
       usdPerSeq: cfg.stake_per_sequencer_token * cfg.token_usd,
       targetCommitteeDays: committeeTarget.days,
       targetCommitteeEhDays: committeeEhTarget.days,
-      targetNonCommitteeDays: nonCommitteeTarget.days,
+      targetEthereumDays: ethereumTarget.days,
       targetCommitteeStakeToken: committeeTarget.stakeToken,
       targetCommitteeEhStakeToken: committeeEhTarget.stakeToken,
-      targetNonCommitteeStakeToken: nonCommitteeTarget.stakeToken,
+      targetEthereumStakeToken: ethereumTarget.stakeToken,
       targetCommitteeStakeUsd: committeeTarget.stakeUsd,
       targetCommitteeEhStakeUsd: committeeEhTarget.stakeUsd,
-      targetNonCommitteeStakeUsd: nonCommitteeTarget.stakeUsd,
+      targetEthereumStakeUsd: ethereumTarget.stakeUsd,
       escapeHatchBondUsd: ehBondUsd,
       escapeHatchWithdrawalTaxUsd: ehWithdrawalTaxUsd,
     },
@@ -903,12 +982,12 @@ function renderCharts(output) {
     },
     {
       x: cumulativeDays,
-      y: time.cumulative.non,
+      y: time.cumulative.ethereum,
       mode: "lines",
-      name: "Non-committee",
+      name: ETHEREUM_INCLUSION_MODEL.label,
       text: cumulativeHover,
-      hovertemplate: "%{text}<br>Cumulative probability: %{y:.6f}<extra>Non-committee</extra>",
-      line: { color: NON_COMMITTEE_COLOR, width: 2 },
+      hovertemplate: `%{text}<br>Cumulative probability: %{y:.6f}<extra>${ETHEREUM_INCLUSION_MODEL.label}</extra>`,
+      line: { color: ETHEREUM_COLOR, width: 2 },
       connectgaps: false,
     },
   ];
@@ -952,12 +1031,12 @@ function renderCharts(output) {
     },
     {
       x: time.days,
-      y: time.perSlot.non,
+      y: time.perSlot.ethereum,
       mode: "lines",
-      name: "Non-committee",
+      name: ETHEREUM_INCLUSION_MODEL.label,
       text: perSlotHover,
-      hovertemplate: "%{text}<br>Current-slot inclusion: %{y:.6f}<extra>Non-committee</extra>",
-      line: { color: NON_COMMITTEE_COLOR, width: 2 },
+      hovertemplate: `%{text}<br>Current-slot inclusion: %{y:.6f}<extra>${ETHEREUM_INCLUSION_MODEL.label}</extra>`,
+      line: { color: ETHEREUM_COLOR, width: 2 },
       connectgaps: false,
     },
   ];
@@ -977,27 +1056,55 @@ function renderCharts(output) {
   const referenceData = [
     {
       x: reference.fractions,
-      y: reference.delayDays,
+      y: reference.committee.delayDays,
       mode: "lines",
-      name: "Reference committee baseline",
-      text: reference.hover,
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Reference committee baseline</extra>",
-      line: { color: REFERENCE_BASELINE_COLOR, width: 2.5 },
+      name: "Committee static baseline",
+      text: reference.committee.hover,
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Committee static baseline</extra>",
+      line: { color: COMMITTEE_COLOR, width: 2.5 },
+      connectgaps: false,
+    },
+    {
+      x: reference.fractions,
+      y: reference.ethereum.delayDays,
+      mode: "lines",
+      name: "Ethereum static baseline",
+      text: reference.ethereum.hover,
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Ethereum static baseline</extra>",
+      line: { color: ETHEREUM_COLOR, width: 2.5 },
       connectgaps: false,
     },
   ];
 
-  if (reference.current) {
+  if (reference.committee.current) {
     referenceData.push({
-      x: [reference.current.fraction],
-      y: [reference.current.delayDays],
+      x: [reference.committee.current.fraction],
+      y: [reference.committee.current.delayDays],
       mode: "markers",
-      name: "Current config",
-      text: [reference.current.hover],
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config</extra>",
+      name: "Current config (Committee)",
+      text: [reference.committee.current.hover],
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config (Committee)</extra>",
       marker: {
         color: REFERENCE_MARKER_COLOR,
         size: 9,
+        symbol: "circle",
+        line: { color: "#ffffff", width: 1.5 },
+      },
+    });
+  }
+
+  if (reference.ethereum.current) {
+    referenceData.push({
+      x: [reference.ethereum.current.fraction],
+      y: [reference.ethereum.current.delayDays],
+      mode: "markers",
+      name: "Current config (Ethereum)",
+      text: [reference.ethereum.current.hover],
+      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config (Ethereum)</extra>",
+      marker: {
+        color: REFERENCE_MARKER_COLOR,
+        size: 9,
+        symbol: "diamond",
         line: { color: "#ffffff", width: 1.5 },
       },
     });

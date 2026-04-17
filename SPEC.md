@@ -2,17 +2,17 @@
 
 ## Goal
 Compare inclusion behavior for:
-- non-committee sequencing
+- Ethereum-style canonical inclusion
 - committee-based sequencing
 - committee-based sequencing with the Aztec Alpha escape hatch fallback
 
 under either a static sequencer set or configurable user-operated sequencer growth.
 
-## Model (Current App Behavior)
+## Model
 - Initial network: `base_sequencers` total, with censoring share `censor_fraction` fixed from genesis.
 - User onboarding: `max_new_sequencers_per_epoch` honest sequencers become active each epoch (`epoch_slots` slots). If it is `0`, the sequencer set stays fixed for the full simulation.
 - Added-sequencer mix: malicious additions are derived from honest additions using `honest_add_success_rate` (in `(0, 1]`), so lower success rates increase censoring share over time.
-- Non-committee mode: slot proposer is drawn from all active sequencers.
+- Ethereum mode: each slot has one proposer drawn from all active sequencers. The sim counts success as canonical inclusion under a simplified honest-majority LMD-GHOST approximation: if honest stake is `> 50%`, an honest proposer can get the transaction canonically included; if censoring stake is `>= 50%`, the tx is treated as unable to land canonically. This mode does not model Ethereum finality or inactivity leaks.
 - Committee mode: committee of size `committee_size` is sampled per epoch from a validator set lagged by `validator_set_lag_epochs`, and reused for that epoch's slots.
 - Committee gate: inclusion is allowed only when committee censors `<= floor((committee_size - 1) / 3)`.
 - Exact hybrid timing: within a non-blocking committee, inclusion opportunities arrive at slot resolution; within a blocking committee, the whole epoch is censored. The app therefore tracks cumulative inclusion at every slot while keeping committee composition fixed for each epoch.
@@ -22,8 +22,10 @@ under either a static sequencer set or configurable user-operated sequencer grow
 - Combined committee + escape hatch output: overall survival is the product of committee-path survival and escape-hatch survival, i.e. the two fallback paths are treated as independent randomness sources.
 - Time horizon: `horizon_slots = floor(max_horizon_days * 24 * 3600 / slot_seconds)`.
 
-## Reference Committee Baseline
-For the stationary committee-only baseline, the cleanest reference is a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
+## Reference Baselines
+For stationary reference curves over the fixed base sequencer set:
+- Committee baseline: a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
+- Ethereum baseline: the same simplified canonical-inclusion model used by the main Ethereum path, evaluated with a fixed proposer set and no growth.
 - Runnable reference script: `python3 scripts/reference_committee_baseline.py`
 - The app also renders a dedicated reference chart: target inclusion delay vs. censorship fraction over the fixed base sequencer set
 - Defaults match the app's current static preset; edit the constants at the top if needed
@@ -50,9 +52,9 @@ Validation:
 
 ## Outputs
 - Cumulative inclusion chart over elapsed days for the full `max_horizon_days`, evaluated at slot resolution.
-- Current-slot inclusion chart: uses full `max_horizon_days` and shows the probability of inclusion in the current slot conditional on the user still waiting. Committee paths can sawtooth because late-slot survival within an epoch updates the posterior toward a blocking committee, then resets when a new committee is sampled.
-- Reference committee baseline chart: static committee-only `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
-- Target cards show the first slot at which the configured cumulative inclusion probability is reached for committee, committee + escape hatch, and non-committee modes.
+- Current-slot inclusion chart: uses full `max_horizon_days` and shows the probability of inclusion in the current slot conditional on the user still waiting. Committee paths can sawtooth because late-slot survival within an epoch updates the posterior toward a blocking committee, then resets when a new committee is sampled. The Ethereum path is slot-based and only turns on once honest stake is strictly greater than censoring stake.
+- Reference baseline chart: static committee and Ethereum `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
+- Target cards show the first slot at which the configured cumulative inclusion probability is reached for committee, committee + escape hatch, and Ethereum modes.
 
 ## UI Actions
 - `Run Simulation`: validate inputs, recompute data, rerender charts.
