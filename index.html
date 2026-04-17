@@ -11,7 +11,7 @@
   <main class="page">
     <header>
       <h1>CR sim for decentralized sequencers</h1>
-      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction with a given probability. Config defaults model a static sequencer set with 50% censoring, a 99% inclusion target, and the escape hatch enabled. The hardcoded quorum for committees is 2/3.</p>
+      <p>For L2s with sequencer committees or fully decentralized sequencers, this calculator shows how long a censored user would have to wait, and how much they would have to stake, to include their transaction with a given probability. Config defaults model a static sequencer set with 50% censoring, a 99% inclusion target, and the escape hatch enabled. The Ethereum path approximates canonical inclusion under honest-majority LMD-GHOST and does not model finality. The hardcoded quorum for committees is 2/3.</p>
     </header>
 
     <section class="t90-strip" aria-live="polite">
@@ -25,10 +25,10 @@
         <p id="target-committee-eh-value" class="t90-value">-</p>
         <p id="target-committee-eh-cost" class="t90-meta">stake @T99: -</p>
       </article>
-      <article class="t90-card t90-card-non">
-        <p id="target-non-label" class="t90-label">Non-committee T99</p>
-        <p id="target-non-value" class="t90-value">-</p>
-        <p id="target-non-cost" class="t90-meta">Cost @T99: -</p>
+      <article class="t90-card t90-card-ethereum">
+        <p id="target-ethereum-label" class="t90-label">Ethereum T99</p>
+        <p id="target-ethereum-value" class="t90-value">-</p>
+        <p id="target-ethereum-cost" class="t90-meta">Cost @T99: -</p>
       </article>
     </section>
 
@@ -107,13 +107,13 @@
 
     <section class="panel">
       <h2>Current-slot Inclusion</h2>
-      <p class="note">Probability of inclusion in the current slot conditional on the 'still waiting' scenario. This means that inclusion probability is not memoryless and is highest at the start of a given epoch. It decreases within the epoch because of the evidence that inclusion has still not happened and the entire epoch having a censoring quorum becomes more likely.</p>
+      <p class="note">Probability of inclusion in the current slot conditional on the user still waiting. Committee paths can sawtooth within an epoch because surviving late slots makes a blocking committee more likely. The Ethereum path is slot-by-slot and only becomes live once honest stake is strictly greater than censoring stake.</p>
       <div id="chart-per-slot" class="chart-wrap"></div>
     </section>
 
     <section class="panel">
       <h2>Static Sequencer Set Censorship Fraction vs. Inclusion delay</h2>
-      <p class="note">Committee-only T99 inclusion vs. censorship fraction over the fixed base sequencer set. This baseline ignores sequencer growth and the escape hatch; the current censor fraction is marked red.</p>
+      <p class="note">Committee and Ethereum static baselines vs. censorship fraction over the fixed base sequencer set. These ignore sequencer growth and the escape hatch. The current censor fraction is marked red for each curve when the target delay is finite.</p>
       <div id="chart-reference-baseline" class="chart-wrap"></div>
     </section>
   </main>
