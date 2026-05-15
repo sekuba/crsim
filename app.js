@@ -5,6 +5,58 @@ const COMMITTEE_COLOR = "#2563EB";
 const COMMITTEE_EH_COLOR = "#059669";
 const ETHEREUM_COLOR = "#F97316";
 const REFERENCE_MARKER_COLOR = "#DC2626";
+const REFERENCE_MAX_CENSOR_FRACTION = 0.5;
+const REFERENCE_TARGET_INCLUSION_PERCENT = 99;
+const SECONDS_PER_DAY = 24 * 3600;
+const LINEAR_DURATION_STEPS_SECONDS = [
+  1,
+  2,
+  5,
+  10,
+  15,
+  30,
+  60,
+  2 * 60,
+  5 * 60,
+  10 * 60,
+  15 * 60,
+  30 * 60,
+  3600,
+  2 * 3600,
+  4 * 3600,
+  6 * 3600,
+  12 * 3600,
+  SECONDS_PER_DAY,
+  2 * SECONDS_PER_DAY,
+  5 * SECONDS_PER_DAY,
+  10 * SECONDS_PER_DAY,
+  20 * SECONDS_PER_DAY,
+  30 * SECONDS_PER_DAY,
+  60 * SECONDS_PER_DAY,
+  90 * SECONDS_PER_DAY,
+  180 * SECONDS_PER_DAY,
+  365 * SECONDS_PER_DAY,
+];
+const LOG_DURATION_TICKS_SECONDS = [
+  60,
+  2 * 60,
+  5 * 60,
+  10 * 60,
+  30 * 60,
+  3600,
+  2 * 3600,
+  6 * 3600,
+  12 * 3600,
+  SECONDS_PER_DAY,
+  2 * SECONDS_PER_DAY,
+  5 * SECONDS_PER_DAY,
+  10 * SECONDS_PER_DAY,
+  20 * SECONDS_PER_DAY,
+  30 * SECONDS_PER_DAY,
+  60 * SECONDS_PER_DAY,
+  180 * SECONDS_PER_DAY,
+  365 * SECONDS_PER_DAY,
+];
 
 const EH_BOND_TOKENS = 332000000;
 const EH_WITHDRAWAL_TAX_TOKENS = 1660000;
@@ -15,12 +67,12 @@ const EH_CIRCULATING_SUPPLY_TOKENS = 3000000000;
 const EH_MAX_OTHER_CANDIDATES =
   Math.floor(EH_CIRCULATING_SUPPLY_TOKENS / EH_BOND_TOKENS) - EH_USER_CANDIDATE_SLOTS;
 
-// Default baseline: static sequencer set, 50% censoring, 99% inclusion target.
+// Default baseline: static sequencer set, 49.99% censoring, 99% inclusion target.
 const DEFAULT_CONFIG = {
   base_sequencers: 4000,
   stake_per_sequencer_token: 200000,
   token_usd: 0.02,
-  censor_fraction: 0.50,
+  censor_fraction: 0.4999,
   committee_size: 48,
   slot_seconds: 72,
   max_horizon_days: 20,
@@ -56,6 +108,7 @@ const formEl = document.getElementById("config-form");
 const statusEl = document.getElementById("status");
 const runBtn = document.getElementById("run-btn");
 const resetBtn = document.getElementById("reset-btn");
+const referenceScaleInputs = Array.from(document.querySelectorAll("input[name='reference_y_scale']"));
 const targetCommitteeLabelEl = document.getElementById("target-committee-label");
 const targetCommitteeEhLabelEl = document.getElementById("target-committee-eh-label");
 const targetEthereumLabelEl = document.getElementById("target-ethereum-label");
@@ -68,6 +121,7 @@ const targetEthereumCostEl = document.getElementById("target-ethereum-cost");
 const cumulativeChartEl = document.getElementById("chart-cumulative");
 const perSlotChartEl = document.getElementById("chart-per-slot");
 const referenceBaselineChartEl = document.getElementById("chart-reference-baseline");
+let lastSimulationOutput = null;
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -82,6 +136,11 @@ function targetLabel(percent) {
   return `T${formatPercentValue(percent)}`;
 }
 
+function referenceYScale() {
+  const selected = referenceScaleInputs.find((input) => input.checked);
+  return selected && selected.value === "log" ? "log" : "linear";
+}
+
 function syncTargetLabels(cfg) {
   const label = targetLabel(cfg.target_inclusion_percent);
   targetCommitteeLabelEl.textContent = `Committee ${label}`;
@@ -89,23 +148,34 @@ function syncTargetLabels(cfg) {
   targetEthereumLabelEl.textContent = `${ETHEREUM_INCLUSION_MODEL.label} ${label}`;
 }
 
+function trimFixed(value, digits) {
+  return Number(value.toFixed(digits)).toString();
+}
+
+function formatDurationSeconds(totalSeconds) {
+  if (!Number.isFinite(totalSeconds)) {
+    return "∞";
+  }
+  if (totalSeconds <= 0) {
+    return "0s";
+  }
+  if (totalSeconds < 90) {
+    return `${trimFixed(totalSeconds, totalSeconds < 10 ? 1 : 0)}s`;
+  }
+  if (totalSeconds < 3600) {
+    const minutes = totalSeconds / 60;
+    return `${trimFixed(minutes, minutes < 10 ? 1 : 0)}m`;
+  }
+  if (totalSeconds < 48 * 3600) {
+    const hours = totalSeconds / 3600;
+    return `${trimFixed(hours, hours < 10 ? 1 : 0)}h`;
+  }
+  const days = totalSeconds / SECONDS_PER_DAY;
+  return `${trimFixed(days, 2)}d`;
+}
+
 function formatHumanDurationDays(days) {
-  const totalSeconds = days * 24 * 3600;
-  if (totalSeconds >= 48 * 3600) {
-    return `${days.toFixed(2)}d`;
-  }
-
-  const totalHours = totalSeconds / 3600;
-  if (totalHours >= 1) {
-    return `${totalHours.toFixed(2)}h`;
-  }
-
-  const totalMinutes = totalSeconds / 60;
-  if (totalMinutes >= 1) {
-    return `${totalMinutes.toFixed(0)}m`;
-  }
-
-  return `${totalSeconds.toFixed(0)}s`;
+  return formatDurationSeconds(days * SECONDS_PER_DAY);
 }
 
 function targetCardText(days, maxHorizonDays) {
@@ -535,7 +605,7 @@ function referenceTargetPointFromPartialSurvival(cfg, partialSurvival) {
     };
   }
 
-  const targetSurvival = 1.0 - (cfg.target_inclusion_percent / 100.0);
+  const targetSurvival = 1.0 - (REFERENCE_TARGET_INCLUSION_PERCENT / 100.0);
   const logTargetSurvival = Math.log(targetSurvival);
   let fullCyclesBeforeSearch = 0;
   let logCycleSurvival = Number.NEGATIVE_INFINITY;
@@ -597,11 +667,19 @@ function referenceEthereumCurvePoint(cfg, censorCount) {
   };
 }
 
-function referenceHoverText(totalSeq, censorCount, inclusionProbability, probabilityLabel, label = "") {
+function referenceHoverText(
+  totalSeq,
+  censorCount,
+  inclusionProbability,
+  probabilityLabel,
+  targetDays,
+  label = ""
+) {
   const prefix = label ? `${label}<br>` : "";
   return `${prefix}Censoring fraction: ${((100 * censorCount) / totalSeq).toFixed(2)}%`
     + `<br>Censoring sequencers: ${censorCount.toLocaleString()} / ${totalSeq.toLocaleString()}`
-    + `<br>${probabilityLabel}: ${inclusionProbability.toFixed(12)}`;
+    + `<br>${probabilityLabel}: ${inclusionProbability.toFixed(12)}`
+    + `<br>Target delay: ${formatHumanDurationDays(targetDays)}`;
 }
 
 function currentReferencePoint(totalSeq, censorCount, point, probabilityLabel, label) {
@@ -616,6 +694,7 @@ function currentReferencePoint(totalSeq, censorCount, point, probabilityLabel, l
       censorCount,
       point.inclusionProbability,
       probabilityLabel,
+      point.targetDays,
       label
     ),
   };
@@ -627,8 +706,9 @@ function buildReferenceCurves(cfg, model) {
   const committeeHover = [];
   const ethereumDelayDays = [];
   const ethereumHover = [];
+  const maxReferenceCensorCount = Math.floor(cfg.base_sequencers * REFERENCE_MAX_CENSOR_FRACTION);
 
-  for (let censorCount = 0; censorCount <= cfg.base_sequencers; censorCount += 1) {
+  for (let censorCount = 0; censorCount <= maxReferenceCensorCount; censorCount += 1) {
     const committeePoint = referenceCommitteeCurvePoint(cfg, model, censorCount);
     const ethereumPoint = referenceEthereumCurvePoint(cfg, censorCount);
     fractions.push(censorCount / cfg.base_sequencers);
@@ -638,7 +718,8 @@ function buildReferenceCurves(cfg, model) {
         cfg.base_sequencers,
         censorCount,
         committeePoint.inclusionProbability,
-        "Epoch inclusion probability"
+        "Epoch inclusion probability",
+        committeePoint.targetDays
       )
     );
     ethereumDelayDays.push(Number.isFinite(ethereumPoint.targetDays) ? ethereumPoint.targetDays : null);
@@ -647,7 +728,8 @@ function buildReferenceCurves(cfg, model) {
         cfg.base_sequencers,
         censorCount,
         ethereumPoint.inclusionProbability,
-        "Slot inclusion probability"
+        "Slot inclusion probability",
+        ethereumPoint.targetDays
       )
     );
   }
@@ -656,32 +738,41 @@ function buildReferenceCurves(cfg, model) {
     cfg.base_sequencers,
     Math.max(0, Math.round(cfg.base_sequencers * cfg.censor_fraction))
   );
-  const currentCommitteePoint = referenceCommitteeCurvePoint(cfg, model, currentCensorCount);
-  const currentEthereumPoint = referenceEthereumCurvePoint(cfg, currentCensorCount);
+  const currentPointVisible = currentCensorCount <= maxReferenceCensorCount;
+  const currentCommitteePoint = currentPointVisible
+    ? referenceCommitteeCurvePoint(cfg, model, currentCensorCount)
+    : null;
+  const currentEthereumPoint = currentPointVisible
+    ? referenceEthereumCurvePoint(cfg, currentCensorCount)
+    : null;
 
   return {
     fractions,
     committee: {
       delayDays: committeeDelayDays,
       hover: committeeHover,
-      current: currentReferencePoint(
-        cfg.base_sequencers,
-        currentCensorCount,
-        currentCommitteePoint,
-        "Epoch inclusion probability",
-        "Current config (Committee)"
-      ),
+      current: currentCommitteePoint === null
+        ? null
+        : currentReferencePoint(
+          cfg.base_sequencers,
+          currentCensorCount,
+          currentCommitteePoint,
+          "Epoch inclusion probability",
+          "Current config (Committee)"
+        ),
     },
     ethereum: {
       delayDays: ethereumDelayDays,
       hover: ethereumHover,
-      current: currentReferencePoint(
-        cfg.base_sequencers,
-        currentCensorCount,
-        currentEthereumPoint,
-        "Slot inclusion probability",
-        "Current config (Ethereum)"
-      ),
+      current: currentEthereumPoint === null
+        ? null
+        : currentReferencePoint(
+          cfg.base_sequencers,
+          currentCensorCount,
+          currentEthereumPoint,
+          "Slot inclusion probability",
+          "Current config (Ethereum)"
+        ),
     },
   };
 }
@@ -895,6 +986,97 @@ function buildTimeHover(days, invested, userSeq) {
   });
 }
 
+function chooseLinearDurationStep(maxSeconds) {
+  for (const stepSeconds of LINEAR_DURATION_STEPS_SECONDS) {
+    if (Math.ceil(maxSeconds / stepSeconds) <= 5) {
+      return stepSeconds;
+    }
+  }
+  const roughStep = maxSeconds / 5;
+  return 10 ** Math.ceil(Math.log10(roughStep));
+}
+
+function buildLinearDurationTicks(maxDays) {
+  const maxSeconds = Math.max(1, maxDays * SECONDS_PER_DAY);
+  const stepSeconds = chooseLinearDurationStep(maxSeconds);
+  const tickCount = Math.max(1, Math.ceil(maxSeconds / stepSeconds));
+  const values = [];
+  const labels = [];
+
+  for (let idx = 0; idx <= tickCount; idx += 1) {
+    const seconds = idx * stepSeconds;
+    values.push(seconds / SECONDS_PER_DAY);
+    labels.push(formatDurationSeconds(seconds));
+  }
+
+  return {
+    values,
+    labels,
+    range: [0, (tickCount * stepSeconds) / SECONDS_PER_DAY],
+  };
+}
+
+function buildLogDurationTicks(minDays, maxDays) {
+  const minSeconds = minDays * SECONDS_PER_DAY;
+  const maxSeconds = maxDays * SECONDS_PER_DAY;
+  const lowerSeconds = minSeconds / 1.25;
+  const upperSeconds = maxSeconds * 1.25;
+  const values = [];
+  const labels = [];
+
+  for (const seconds of LOG_DURATION_TICKS_SECONDS) {
+    if (seconds < lowerSeconds || seconds > upperSeconds) {
+      continue;
+    }
+    values.push(seconds / SECONDS_PER_DAY);
+    labels.push(formatDurationSeconds(seconds));
+  }
+
+  if (!values.length) {
+    values.push(minDays, maxDays);
+    labels.push(formatHumanDurationDays(minDays), formatHumanDurationDays(maxDays));
+  }
+
+  return { values, labels };
+}
+
+function referenceDelayValues(reference) {
+  const values = [
+    ...reference.committee.delayDays,
+    ...reference.ethereum.delayDays,
+  ];
+
+  if (reference.committee.current) {
+    values.push(reference.committee.current.delayDays);
+  }
+  if (reference.ethereum.current) {
+    values.push(reference.ethereum.current.delayDays);
+  }
+
+  return values.filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function applyReferenceDurationAxis(layout, reference, scale) {
+  const values = referenceDelayValues(reference);
+  if (!values.length) {
+    return;
+  }
+
+  const minDays = Math.min(...values);
+  const maxDays = Math.max(...values);
+  const ticks = scale === "log"
+    ? buildLogDurationTicks(minDays, maxDays)
+    : buildLinearDurationTicks(maxDays);
+
+  layout.yaxis.tickmode = "array";
+  layout.yaxis.tickvals = ticks.values;
+  layout.yaxis.ticktext = ticks.labels;
+
+  if (scale === "linear" && ticks.range) {
+    layout.yaxis.range = ticks.range;
+  }
+}
+
 function plotConfig() {
   return {
     responsive: true,
@@ -1042,17 +1224,19 @@ function renderCharts(output) {
   ];
 
   const referenceXTicks = {
-    values: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-    labels: ["0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"],
+    values: [0.0, 0.1, 0.2, 0.3, 0.4, REFERENCE_MAX_CENSOR_FRACTION],
+    labels: ["0%", "10%", "20%", "30%", "40%", "50%"],
   };
+  const referenceScale = referenceYScale();
   const referenceLayout = baseLayout(
     "Censorship fraction among the fixed base sequencer set",
-    `Time to ${targetLabel(output.meta.targetInclusionPercent)} inclusion (days, log scale)`,
-    [0, 1],
+    "Time to T99 inclusion",
+    [0, REFERENCE_MAX_CENSOR_FRACTION],
     undefined,
     referenceXTicks
   );
-  referenceLayout.yaxis.type = "log";
+  referenceLayout.yaxis.type = referenceScale;
+  applyReferenceDurationAxis(referenceLayout, reference, referenceScale);
   const referenceData = [
     {
       x: reference.fractions,
@@ -1060,7 +1244,7 @@ function renderCharts(output) {
       mode: "lines",
       name: "Committee static baseline",
       text: reference.committee.hover,
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Committee static baseline</extra>",
+      hovertemplate: "%{text}<extra>Committee static baseline</extra>",
       line: { color: COMMITTEE_COLOR, width: 2.5 },
       connectgaps: false,
     },
@@ -1070,7 +1254,7 @@ function renderCharts(output) {
       mode: "lines",
       name: "Ethereum static baseline",
       text: reference.ethereum.hover,
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Ethereum static baseline</extra>",
+      hovertemplate: "%{text}<extra>Ethereum static baseline</extra>",
       line: { color: ETHEREUM_COLOR, width: 2.5 },
       connectgaps: false,
     },
@@ -1083,7 +1267,7 @@ function renderCharts(output) {
       mode: "markers",
       name: "Current config (Committee)",
       text: [reference.committee.current.hover],
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config (Committee)</extra>",
+      hovertemplate: "%{text}<extra>Current config (Committee)</extra>",
       marker: {
         color: REFERENCE_MARKER_COLOR,
         size: 9,
@@ -1100,7 +1284,7 @@ function renderCharts(output) {
       mode: "markers",
       name: "Current config (Ethereum)",
       text: [reference.ethereum.current.hover],
-      hovertemplate: "%{text}<br>Target delay: %{y:.6f}d<extra>Current config (Ethereum)</extra>",
+      hovertemplate: "%{text}<extra>Current config (Ethereum)</extra>",
       marker: {
         color: REFERENCE_MARKER_COLOR,
         size: 9,
@@ -1186,6 +1370,7 @@ function runFromForm() {
     configToUrl(cfg);
 
     const output = runSimulation(cfg);
+    lastSimulationOutput = output;
     renderCharts(output);
     renderTargetCards(output.meta, cfg.max_horizon_days, targetLabel(cfg.target_inclusion_percent));
     setStatus("Simulation complete.");
@@ -1196,6 +1381,13 @@ function runFromForm() {
 }
 
 runBtn.addEventListener("click", runFromForm);
+referenceScaleInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    if (lastSimulationOutput) {
+      renderCharts(lastSimulationOutput);
+    }
+  });
+});
 resetBtn.addEventListener("click", () => {
   setFormValues(DEFAULT_CONFIG);
   runFromForm();
