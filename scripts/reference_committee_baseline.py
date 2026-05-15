@@ -4,7 +4,7 @@ from math import ceil, comb, log
 
 N = 4000
 n = 48
-censoring = 0.50  # largest censoring minority (honest majority assumption for CR)
+censoring = 0.4999  # largest default censoring minority (honest majority assumption for CR)
 epoch_slots = 32
 slot_seconds = 72
 target_survival = 0.01  # 99% inclusion

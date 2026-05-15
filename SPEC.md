@@ -27,7 +27,7 @@ For stationary reference curves over the fixed base sequencer set:
 - Committee baseline: a hypergeometric model over committee composition. This omits sequencer growth and the escape hatch, so it is a baseline for the committee path rather than the full app output.
 - Ethereum baseline: the same simplified canonical-inclusion model used by the main Ethereum path, evaluated with a fixed proposer set and no growth.
 - Runnable reference script: `python3 scripts/reference_committee_baseline.py`
-- The app also renders a dedicated reference chart: target inclusion delay vs. censorship fraction over the fixed base sequencer set
+- The app also renders a dedicated reference chart: T99 inclusion delay vs. censorship fraction up to 50% over the fixed base sequencer set
 - Defaults match the app's current static preset; edit the constants at the top if needed
 
 ## Inputs
@@ -53,7 +53,7 @@ Validation:
 ## Outputs
 - Cumulative inclusion chart over elapsed days for the full `max_horizon_days`, evaluated at slot resolution.
 - Current-slot inclusion chart: uses full `max_horizon_days` and shows the probability of inclusion in the current slot conditional on the user still waiting. Committee paths can sawtooth because late-slot survival within an epoch updates the posterior toward a blocking committee, then resets when a new committee is sampled. The Ethereum path is slot-based and only turns on once honest stake is strictly greater than censoring stake.
-- Reference baseline chart: static committee and Ethereum `T_target` delay vs. censorship fraction, with a log-scale day axis. This uses `base_sequencers`, `committee_size`, `epoch_slots`, `slot_seconds`, and `target_inclusion_percent`, and ignores user-operated sequencer growth plus the escape hatch.
+- Reference baseline chart: static committee and Ethereum T99 delay vs. censorship fraction up to 50%. This uses `base_sequencers`, `committee_size`, `epoch_slots`, and `slot_seconds`, ignores user-operated sequencer growth plus the escape hatch, and supports linear or log y-axis scale modes.
 - Target cards show the first slot at which the configured cumulative inclusion probability is reached for committee, committee + escape hatch, and Ethereum modes.
 
 ## UI Actions
